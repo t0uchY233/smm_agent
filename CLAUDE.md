@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Скиллы
 
-**`/video-script`** — генерация сценария для YouTube (Шаг 0). Тема → диалог → сценарий → телесуфлёр-текст. Express mode: тема + детали в одном сообщении → сразу сценарий.
+**`/video-script`** — генерация сценария для YouTube (Шаг 0). Тема → диалог → сценарий → телесуфлёр-текст → DOCX в `.tmp/teleprompter/`. Express mode: тема + детали в одном сообщении → сразу сценарий.
 
 **`/repurpose-youtube-video`** — репурпоз видео в контент (Шаг 3). YouTube URL → транскрипт → тексты → публикация. Express mode: вставить URL → сразу работа, категория определяется автоматически.
 
@@ -55,3 +55,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **RSS / Дзен:** после публикации статья автоматически попадает в RSS → Яндекс Дзен. Контент должен использовать только разрешённые Дзеном HTML-теги, YouTube как plain link, ≥300 знаков текста.
 - **Telegram chat_id канала:** `-1001972632255`.
 - **n8n служебный канал:** `-1003932006777` (уведомления о загрузке).
+- **Телесуфлёр DOCX:** `/video-script` всегда сохраняет телесуфлёр-текст как DOCX в `.tmp/teleprompter/YYYY-MM-DD-alias.docx` (Arial 16pt, межстрочный 1.4, разделители между блоками).

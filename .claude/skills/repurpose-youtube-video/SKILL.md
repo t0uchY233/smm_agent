@@ -87,11 +87,19 @@ if match:
 - If no transcript at all: report to user, ask them to provide content manually
 - Result: `title` (video title) and `content` (full transcript text)
 
-### Step 3: Visuals (handled by n8n)
+### Step 3: Generate Cover Image
 
-**YouTube thumbnail is generated automatically by n8n** when video is uploaded from Google Drive. This skill does NOT generate visuals.
+Generate a single cover image used across all platforms (Telegram photo + blog cover).
 
-If the user explicitly asks for additional visuals (e.g., blog banner), you can generate them via Blotato API if `BLOTATO_API_KEY` is configured in `.env`. Otherwise, skip this step entirely.
+```bash
+python tools/generate_cover.py "ARTICLE_TITLE_HERE" --upload
+```
+
+This generates a 1280x720 cover via OpenRouter (Gemini) — white background, face from reference photo, thematic elements matching the topic — and uploads it to veselkov.me via ApiUpload. Returns JSON with `url` (remote) and `local_path` (local file).
+
+Save the returned `url` as `COVER_URL` — it will be used in Step 5 (Telegram sendPhoto) and Step 6.5 (blog cover).
+
+If generation fails, proceed without cover: use YouTube thumbnail URL as fallback for Telegram, skip blog cover step.
 
 ### Step 4: Adapt Content for Each Platform
 
@@ -124,11 +132,11 @@ Using the extracted `title` and `content` from Step 2, and the tone-of-voice.md 
 
 ### Step 5: Publish to Telegram
 
-**Send photo with caption:**
+**Send photo with caption** (use `COVER_URL` from Step 3):
 ```bash
 curl -s -X POST "https://api.telegram.org/botTELEGRAM_BOT_TOKEN_VALUE/sendPhoto" \
   -F "chat_id=-1001972632255" \
-  -F "photo=IMAGE_URL_HERE" \
+  -F "photo=COVER_URL" \
   -F "caption=TELEGRAM_TEXT_HERE" \
   -F "parse_mode=HTML"
 ```
@@ -176,6 +184,32 @@ curl -s -X POST "https://veselkov.me/api-publish.html" \
 
 **After blog publish:** Article appears on veselkov.me and becomes available via RSS feed → Yandex Zen picks it up automatically (moderation may apply).
 
+### Step 6.5: Set Blog Cover
+
+After blog publish returns `id` (resource_id), set the generated cover as the blog article's cover image. Use the local file from Step 3:
+
+```python
+import json, urllib.request, base64
+
+with open('LOCAL_PATH_FROM_STEP_3', 'rb') as f:
+    b64 = base64.b64encode(f.read()).decode('ascii')
+
+payload = json.dumps({'resource_id': RESOURCE_ID, 'image_data': b64}).encode('utf-8')
+req = urllib.request.Request(
+    'https://veselkov.me/api-set-cover.html',
+    data=payload,
+    headers={'Content-Type': 'application/json; charset=utf-8', 'X-API-Key': BLOG_API_KEY},
+    method='POST',
+)
+# Response is HTML-wrapped — extract JSON via regex
+```
+
+The API saves the cover to `assets/images/products/{id}/`, creates thumbnails (120x90, 360x270, 650x488), and registers them in miniShop2 gallery. The 650x488 thumbnail is displayed in article cards on the main page.
+
+**IMPORTANT:** The response is wrapped in HTML (the MODX resource uses HTML content type). Extract JSON from the response body using regex: `re.search(r'\{"success"', raw)` then parse balanced braces.
+
+If cover setup fails, log the error but don't block — the article is already published.
+
 ### Step 7: Log Results
 
 Append a row to `publish-log.md` (in the project directory):
@@ -200,16 +234,18 @@ Use ✅ for success, ❌ for failure. Include error details if failed.
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `youtube-transcript-api` (Python) | — | Extract YouTube transcript locally |
+| `tools/generate_cover.py` (Python) | — | Generate AI cover via OpenRouter (Gemini) |
 | `api.telegram.org/bot.../sendPhoto` | POST | Send photo+caption to Telegram |
 | `api.telegram.org/bot.../sendMessage` | POST | Send text to Telegram (fallback) |
 | `veselkov.me/api-publish.html` | POST | Publish article to blog |
+| `veselkov.me/api-set-cover.html` | POST | Set cover image on blog article |
 
 ## Error Handling
 
 | Error | Action |
 |-------|--------|
 | Transcript not available (no subtitles) | Report to user, ask them to provide content manually |
-| Visual generation failed | Visuals handled by n8n — skip in this skill |
+| Cover generation failed | Use YouTube thumbnail as fallback for Telegram, skip blog cover |
 | Telegram send failed | Show error, ask user to verify bot token and channel permissions |
 | Blog publish failed | Show error details, ask user to verify API key and endpoint |
 | .env file missing or keys empty | Stop immediately, instruct user to fill in .env |
