@@ -1,0 +1,421 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://veselkov.me"
+            },
+            {
+              "name": "X-Title",
+              "value": "n8n YouTube Thumbnail"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"google/gemini-3.1-flash-image-preview\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Сгенерируй профессиональную обложку (thumbnail) для YouTube видео. Заголовок видео: \\\"{{ $json.videoTitle }}\\\". Стиль: яркий, контрастный, с крупным текстом заголовка на русском языке, привлекающий внимание. Размер 1280x720. Без мелких деталей, читаемый даже на маленьком экране.\"\n    }\n  ],\n  \"modalities\": [\"image\", \"text\"],\n  \"max_tokens\": 4096,\n  \"temperature\": 0.8\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "b0d7206a-7bc4-40b5-9fd6-9d8ebec7b29e",
+      "name": "🎨 Генерация обложки (AI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1888,
+        1792
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1chGTFcNLWX4rRnA",
+          "name": "OpenRouter"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $json.videoTitle }}",
+        "regionCode": "RU",
+        "categoryId": "={{ $json.videoCategory }}",
+        "options": {
+          "privacyStatus": "private"
+        }
+      },
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [
+        -1888,
+        2192
+      ],
+      "id": "60c7ebc6-ae63-4edd-8dfa-12f3cd6f18ff",
+      "name": "🎥 Загрузить на YouTube",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "uAQzrCDny8QAApH6",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "2caca13f-2a27-4517-80e5-2f8c038ad7dd",
+      "name": "🔀 Ждём обложку + загрузку",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -1440,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=1ZCw5WxKdgfbwL6u19_ezZnuRBuPod_vJ"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "id": "0c9b9bce-c4c3-46e0-9139-1610dd1f5980",
+      "name": "📁 Google Drive Trigger1",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2784,
+        2000
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-video",
+              "leftValue": "={{ $json.mimeType }}",
+              "rightValue": "video/",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7fc8ea3a-b24f-4335-bbf3-1d159dbb7d8d",
+      "name": "🎬 Это видео?1",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2560,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "options": {
+          "fileName": "video"
+        }
+      },
+      "id": "77dedd42-512b-404a-9e84-fd7d9f611425",
+      "name": "⬇️ Скачать видео1",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -2336,
+        2000
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Парсим имя файла для метаданных YouTube\n// Формат: \"Заголовок ## Описание ## Категория.mp4\"\n// Или просто: \"Заголовок видео.mp4\"\n\nconst inputItems = $input.all();\nconst results = [];\n\nfor (const item of inputItems) {\n  const fileName = item.json.name || item.json.originalFilename || 'Без названия';\n  \n  // Убираем расширение\n  const nameWithoutExt = fileName.replace(/\\.[^.]+$/, '');\n  \n  // Разбиваем по разделителю ##\n  const parts = nameWithoutExt.split('##').map(s => s.trim());\n  \n  const title = parts[0] || 'Без названия';\n  const description = parts[1] || '';\n  const category = parts[2] || '22'; // 22 = People & Blogs\n  \n  results.push({\n    json: {\n      ...item.json,\n      videoTitle: title,\n      videoDescription: description,\n      videoCategory: category,\n      originalFileName: fileName\n    },\n    binary: item.binary\n  });\n}\n\nreturn results;"
+      },
+      "id": "fa184684-44e9-44fd-8c14-45b1d78d8106",
+      "name": "📝 Парсинг метаданных1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2112,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Извлекаем base64 изображение из ответа API\n// и сохраняем videoTitle для последующих нод\n\nconst imageUrl = $json.choices[0].message.images[0].image_url.url;\n\n// Разделяем data:image/png;base64, и саму base64 строку\nconst base64Data = imageUrl.split(',')[1];\n\n// Определяем MIME тип\nconst mimeType = imageUrl.match(/data:([a-zA-Z0-9]+\\/[a-zA-Z0-9-.+]+).*,/)[1];\n\n// Определяем расширение файла\nconst extension = mimeType.includes('png') ? 'png' : 'jpg';\n\n// Создаем имя файла\nconst fileName = `thumbnail_${Date.now()}.${extension}`;\n\n// Сохраняем videoTitle из парсинга для использования после Merge\nconst videoTitle = $('📝 Парсинг метаданных1').item.json.videoTitle;\nconst videoDescription = $('📝 Парсинг метаданных1').item.json.videoDescription;\n\nreturn {\n  json: {\n    fileName: fileName,\n    mimeType: mimeType,\n    videoTitle: videoTitle,\n    videoDescription: videoDescription,\n    success: true\n  },\n  binary: {\n    thumbnail: {\n      data: base64Data,\n      mimeType: mimeType,\n      fileName: fileName\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1664,
+        1792
+      ],
+      "id": "6d1d984e-f0c2-4971-9273-7d0428deb241",
+      "name": "🖼️ Извлечь обложку из ответа2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={{ $json.uploadId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "image/png"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "thumbnail",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "d1baebfe-ae54-4443-839a-4cfd54212e6b",
+      "name": "🖼️ Установить обложку на YouTube1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1216,
+        2000
+      ],
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "uAQzrCDny8QAApH6",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "set-url",
+              "name": "youtubeUrl",
+              "value": "=https://youtube.com/watch?v={{ $('🔀 Ждём обложку + загрузку').item.json.uploadId }}",
+              "type": "string"
+            },
+            {
+              "id": "set-title",
+              "name": "videoTitle",
+              "value": "={{ $('🔀 Ждём обложку + загрузку').item.json.videoTitle }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ef8ac0f4-1b7f-4f5f-af00-d3d794bc98d8",
+      "name": "🔗 Сохранить URL1",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -992,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003932006777",
+        "text": "=✅ Видео загружено на YouTube!\n\n📹 {{ $json.videoTitle }}\n🔗 {{ $json.youtubeUrl }}\n🎨 Обложка установлена\n\n👉 Открой Claude Code и запусти:\n<code>{{ $json.youtubeUrl }}</code>\n\nСкопируй URL выше → вставь в Claude Code → /repurpose-youtube-video",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "71a6da1a-aab1-4647-a550-97b9a2939dc4",
+      "name": "📩 Telegram уведомление1",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -768,
+        2000
+      ],
+      "webhookId": "c7833fc3-c07d-42d3-9eb2-967bd428de67",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "🎨 Генерация обложки (AI)": {
+      "main": [
+        [
+          {
+            "node": "🖼️ Извлечь обложку из ответа2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🎥 Загрузить на YouTube": {
+      "main": [
+        [
+          {
+            "node": "🔀 Ждём обложку + загрузку",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "🔀 Ждём обложку + загрузку": {
+      "main": [
+        [
+          {
+            "node": "🖼️ Установить обложку на YouTube1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📁 Google Drive Trigger1": {
+      "main": [
+        [
+          {
+            "node": "🎬 Это видео?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🎬 Это видео?1": {
+      "main": [
+        [
+          {
+            "node": "⬇️ Скачать видео1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⬇️ Скачать видео1": {
+      "main": [
+        [
+          {
+            "node": "📝 Парсинг метаданных1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Парсинг метаданных1": {
+      "main": [
+        [
+          {
+            "node": "🎨 Генерация обложки (AI)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🎥 Загрузить на YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🖼️ Извлечь обложку из ответа2": {
+      "main": [
+        [
+          {
+            "node": "🔀 Ждём обложку + загрузку",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🖼️ Установить обложку на YouTube1": {
+      "main": [
+        [
+          {
+            "node": "🔗 Сохранить URL1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔗 Сохранить URL1": {
+      "main": [
+        [
+          {
+            "node": "📩 Telegram уведомление1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "18021caa13c5cb5f2917678412a500e4d96e60027265f9b771588b75d3ff2dae"
+  }
+}
