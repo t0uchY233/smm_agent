@@ -195,7 +195,7 @@ h3 = doc.add_heading("Команды Claude Code", level=1)
 add_text('/video-script "тема"', bold=True, size=12)
 add_text("Создать сценарий и телесуфлёр-текст", size=11, indent=True)
 add_text("")
-add_text("/repurpose-youtube-video", bold=True, size=12)
+add_text("/publish-from-script", bold=True, size=12)
 add_text("Запускается когда вставляешь YouTube URL", size=11, indent=True)
 
 doc.add_paragraph()
