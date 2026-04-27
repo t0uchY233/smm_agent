@@ -4,39 +4,102 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # SMM Agent — Unified Content Pipeline
 
-Автоматическое перепрофилирование YouTube-видео в контент для Telegram-канала, блога veselkov.me и Яндекс Дзен (через RSS блога).
+Перепрофилирование YouTube-видео в контент для Telegram-канала, блога veselkov.me и Яндекс Дзен (через RSS блога) с **отложенной публикацией по расписанию**.
 
 ## Pipeline: полный цикл
 
 ```
-[Шаг 0] /video-script → Тема → Сценарий → Телесуфлёр-текст
+[Шаг 0] /video-script → Тема + дата/время публикации → Сценарий → Телесуфлёр-DOCX
+        Имя DOCX: YYYY-MM-DD-HHMM-alias.docx (имя = время публикации MSK)
+
 [Шаг 1] Запись видео (пользователь)
-[Шаг 2] Google Drive → n8n (YouTube upload + AI-thumbnail) → Telegram уведомление
-[Шаг 3] /repurpose-youtube-video → Транскрипт → Тексты → Утверждение → Публикация (Telegram + Blog + Дзен)
+
+[Шаг 2] Google Drive (имя YYYY-MM-DD-HHMM-alias.mp4) → n8n:
+        - upload на YouTube как scheduled (publishAt = время из имени)
+        - AI-thumbnail → загрузка
+        - upsert строки в Sheets (status=uploaded, scheduled_at, youtube_url)
+        - Telegram уведомление в служебный канал
+
+[Шаг 3] /publish-from-script <youtube_url>:
+        - lookup в Sheets по youtube_id → достать scheduled_at и найти DOCX
+        - read_docx.py → title + body_text
+        - generate_cover.py → cover_url
+        - адаптация текстов для Telegram + блога
+        - превью пользователю
+        - POST в n8n webhook → строка в Sheets обновляется до status=ready
+
+[Шаг 4] n8n Publisher Trigger (каждые 5 мин):
+        - читает Sheets, фильтрует status=ready и scheduled_at <= now
+        - публикует в Telegram канал и блог veselkov.me
+        - обновляет статус → published, шлёт уведомление в служебный канал
 ```
 
-**n8n** (24/7 сервер): ловит видео из Google Drive, загружает на YouTube, генерирует и устанавливает thumbnail, шлёт уведомление с YouTube URL.
+**n8n** (24/7 сервер): загружает видео на YouTube, готовит thumbnail, потом каждые 5 минут забирает готовые посты из Sheets и публикует в Telegram + блог.
 
-**Claude Code** (ручные сессии): получает YouTube URL, извлекает транскрипт, адаптирует тексты под платформы, показывает на утверждение, публикует.
+**Claude Code** (ручные сессии): получает YouTube URL, читает DOCX-сценарий, готовит платформенные тексты + обложку, кладёт строку в Sheets через webhook. **Сам ничего не публикует.**
 
 ## Скиллы
 
-**`/video-script`** — генерация сценария для YouTube (Шаг 0). Тема → диалог → сценарий → телесуфлёр-текст → DOCX в `.tmp/teleprompter/`. Express mode: тема + детали в одном сообщении → сразу сценарий.
+**`/video-script`** (Шаг 0) — генерация сценария для YouTube. Тема + дата/время публикации → диалог → сценарий → телесуфлёр-DOCX. Имя файла = `YYYY-MM-DD-HHMM-alias.docx` (время публикации зашито в имя). Express mode: тема + детали + дата/время в одном сообщении.
 
-**`/repurpose-youtube-video`** — репурпоз видео в контент (Шаг 3). YouTube URL → транскрипт → тексты → публикация. Express mode: вставить URL → сразу работа, категория определяется автоматически.
+**`/publish-from-script`** (Шаг 3) — подготовка постов из DOCX-сценария и постановка в очередь Sheets. YouTube URL → lookup в Sheets → DOCX → тексты + обложка → POST в n8n webhook. Express mode: вставить URL → автоматический поиск DOCX и подготовка контента.
 
 ## Конфигурация
 
 **Файл `.env`** содержит ключи:
-- `TELEGRAM_BOT_TOKEN` — от @BotFather
-- `BLOG_API_KEY` — для veselkov.me API
-- `BLOTATO_API_KEY` — опционально, для дополнительных визуалов
+- `TELEGRAM_BOT_TOKEN` — от @BotFather (используется как контроль длины caption)
+- `BLOG_API_KEY` — для veselkov.me API (потребляет n8n)
+- `OPENROUTER_API_KEY` — для генерации обложек
+- `N8N_BASE_URL`, `N8N_WEBHOOK_LOOKUP`, `N8N_WEBHOOK_UPDATE` — endpoint'ы n8n
+- `SMM_SCHEDULE_SPREADSHEET_ID` — ID Google Sheets очереди
 
 **`tone-of-voice.md`** — системная инструкция по стилю контента (цифровой двойник Сергея Веселкова, инженерно-прагматичный тон, аудитория 40+).
 
-**`publish-log.md`** — лог публикаций.
+**`publish-log.md`** — лог отправок в очередь.
 
-**`n8n.json`** — n8n workflow для импорта (Google Drive → YouTube → Telegram).
+**`n8n.json`** — n8n workflow для импорта (Google Drive → YouTube scheduled → Sheets upsert → Telegram уведомление).
+
+**`n8n_actual.json`** — n8n Publisher workflow (каждые 5 мин читает Sheets и публикует в Telegram + блог).
+
+## Google Sheets очередь
+
+**ID:** `13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY`
+**Лист:** `schedule`
+
+**Колонки** (порядок важен — n8n матчит по позиции):
+
+| Колонка | Кто пишет | Когда |
+|---|---|---|
+| `youtube_id` | n8n upload | после YouTube upload (primary key для upsert) |
+| `youtube_url` | n8n upload | после YouTube upload |
+| `drive_file_id` | n8n upload | после download |
+| `title` | n8n upload | парсинг имени видео |
+| `scheduled_at` | n8n upload | парсинг имени видео (формат `YYYY-MM-DD HH:MM` MSK) |
+| `tg_text` | /publish-from-script | подготовка постов |
+| `blog_html` | /publish-from-script | подготовка постов |
+| `blog_meta` | /publish-from-script | подготовка постов |
+| `blog_alias` | /publish-from-script | подготовка постов |
+| `blog_parent` | /publish-from-script | подготовка постов |
+| `cover_url` | /publish-from-script | генерация обложки |
+| `cover_local_path` | /publish-from-script | генерация обложки |
+| `status` | оба | uploaded → ready → publishing → published / failed |
+| `published_at` | n8n publisher | после успешной публикации |
+| `tg_msg_id` | n8n publisher | после Telegram send |
+| `blog_url` | n8n publisher | после blog publish |
+| `error` | n8n publisher | при failure |
+
+**Жизненный цикл строки:**
+1. n8n создаёт строку (status=uploaded) после загрузки видео на YouTube
+2. /publish-from-script дополняет контентом (status=ready)
+3. n8n Publisher Trigger в назначенное время (`scheduled_at <= now`) ставит status=publishing → публикует → status=published
+4. На failure → status=failed, поле error заполнено, alert в служебный канал
+
+## n8n endpoints
+
+- `N8N_BASE_URL=https://bigetn8n.casacam.net`
+- **Webhook Lookup** (GET): `/webhook/e5bdfd41-4fad-4442-b707-1d416bd5c3b2?youtube_id=<id>` → возвращает строку Sheets как JSON
+- **Webhook Update** (POST): `/webhook/905e8882-caab-4e40-8f42-c6f63524f3e8` → upsert в Sheets по `youtube_id`
+- Auth: нет (открытые webhooks)
 
 ## Категории блога
 
@@ -49,10 +112,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Технические особенности
 
 - **Windows / Кириллица:** при вызове Python через Bash всегда добавлять `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')` во избежание ошибок cp1251.
-- **Telegram caption:** лимит 1024 символа. При превышении — отдельный `sendPhoto` (фото) + `sendMessage` (текст, до 4096 символов).
-- **Blog publish:** HTTP 201 = успех, ответ содержит `url`. `published: 1` публикует сразу, `0` — черновик. API всегда создаёт новый ресурс — нет update. Никогда не вызывать дважды для одной статьи.
+- **JSON payload для webhook:** при POST в n8n webhook с большим JSON и кириллицей всегда писать payload во временный файл (`.tmp/sheets_payload.json`) и отправлять через `curl --data-binary @file.json` — иначе проблемы с экранированием в shell.
+- **Telegram caption:** лимит 1024 символа. n8n при превышении отправляет фото отдельно + текст отдельным `sendMessage` (до 4096).
+- **Blog publish:** n8n вызывает `api-publish.html` с `published: 1` → статья сразу появляется на сайте. API всегда создаёт новый ресурс — n8n не вызывает дважды (защита через upsert по youtube_id).
 - **Blog class_key:** `msProduct` (не `modDocument`), иначе статья не появится на главной.
 - **RSS / Дзен:** после публикации статья автоматически попадает в RSS → Яндекс Дзен. Контент должен использовать только разрешённые Дзеном HTML-теги, YouTube как plain link, ≥300 знаков текста.
-- **Telegram chat_id канала:** `-1001972632255`.
-- **n8n служебный канал:** `-1003932006777` (уведомления о загрузке).
-- **Телесуфлёр DOCX:** `/video-script` всегда сохраняет телесуфлёр-текст как DOCX в `.tmp/teleprompter/YYYY-MM-DD-alias.docx` (Arial 16pt, межстрочный 1.4, разделители между блоками).
+- **Telegram chat_id канала:** `-1001972632255` (публикации).
+- **n8n служебный канал:** `-1003932006777` (уведомления о загрузке и публикации, alerts).
+- **Имя DOCX:** `/video-script` сохраняет в `.tmp/teleprompter/YYYY-MM-DD-HHMM-alias.docx`. Время в имени = время отложенной публикации MSK. По нему `/publish-from-script` находит файл при lookup в Sheets.
+- **Имя видеофайла в Drive:** `YYYY-MM-DD-HHMM-alias.mp4` (тот же формат что DOCX, без расширения совпадает). n8n парсит дату/время из имени для `publishAt` YouTube и `scheduled_at` в Sheets.

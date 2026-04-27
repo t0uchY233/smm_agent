@@ -1,5 +1,111 @@
 {
+  "name": "SMM Agent — Unified Pipeline (Uploader + Publisher + Webhooks)",
   "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1ZCw5WxKdgfbwL6u19_ezZnuRBuPod_vJ"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "id": "trg-drive-uploader",
+      "name": "📁 Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2400,
+        400
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-video",
+              "leftValue": "={{ $json.mimeType }}",
+              "rightValue": "video/",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-is-video",
+      "name": "🎬 Это видео?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2176,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "options": {
+          "fileName": "video"
+        }
+      },
+      "id": "download-video",
+      "name": "⬇️ Скачать видео",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -1952,
+        400
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Парсим имя видеофайла: формат YYYY-MM-DD-HHMM-alias.mp4\n// Пример: 2026-05-01-1400-burovye-krs.mp4\n//   → scheduledAt = 2026-05-01T11:00:00Z (UTC для YouTube publishAt)\n//   → scheduledAtMsk = \"2026-05-01 14:00\" (для Sheets)\n//   → videoTitle = \"burovye krs\" (alias с пробелами)\n//\n// Если имя не подпадает под формат — videoTitle = имя без расширения,\n// scheduledAt = null → видео уйдёт как public сразу.\n\nconst inputItems = $input.all();\nconst results = [];\n\nfor (const item of inputItems) {\n  const fileName = item.json.name || item.json.originalFilename || 'video';\n  const nameWithoutExt = fileName.replace(/\\.[^.]+$/, '');\n\n  let scheduledAt = null;\n  let scheduledAtMsk = null;\n  let title = nameWithoutExt;\n\n  const m = nameWithoutExt.match(/^(\\d{4})-(\\d{2})-(\\d{2})-(\\d{2})(\\d{2})-(.+)$/);\n  if (m) {\n    const [, yyyy, mm, dd, hh, mi, alias] = m;\n    const iso = `${yyyy}-${mm}-${dd}T${hh}:${mi}:00+03:00`;\n    const scheduled = new Date(iso);\n    const now = new Date();\n    const minFuture = new Date(now.getTime() + 15 * 60 * 1000);\n\n    if (!isNaN(scheduled.getTime()) && scheduled >= minFuture) {\n      scheduledAt = scheduled.toISOString();\n      scheduledAtMsk = `${yyyy}-${mm}-${dd} ${hh}:${mi}`;\n    }\n    title = alias.replace(/-/g, ' ');\n  }\n\n  const privacyStatus = scheduledAt ? 'private' : 'public';\n\n  results.push({\n    json: {\n      ...item.json,\n      videoTitle: title,\n      videoCategory: '22',\n      originalFileName: fileName,\n      scheduledAt,\n      scheduledAtMsk,\n      privacyStatus,\n      driveFileId: item.json.id\n    },\n    binary: item.binary\n  });\n}\n\nreturn results;"
+      },
+      "id": "parse-filename",
+      "name": "📝 Парсинг имени",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1728,
+        400
+      ]
+    },
     {
       "parameters": {
         "method": "POST",
@@ -30,13 +136,13 @@
           "timeout": 120000
         }
       },
-      "id": "b0d7206a-7bc4-40b5-9fd6-9d8ebec7b29e",
+      "id": "generate-cover",
       "name": "🎨 Генерация обложки (AI)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -1888,
-        1792
+        -1504,
+        272
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -47,23 +153,37 @@
     },
     {
       "parameters": {
+        "jsCode": "// Извлекаем base64 изображение из ответа OpenRouter\n// и пробрасываем дальше метаданные видео для последующих нод после Merge.\n\nconst imageUrl = $json.choices[0].message.images[0].image_url.url;\nconst base64Data = imageUrl.split(',')[1];\nconst mimeType = imageUrl.match(/data:([a-zA-Z0-9]+\\/[a-zA-Z0-9-.+]+).*,/)[1];\nconst extension = mimeType.includes('png') ? 'png' : 'jpg';\nconst fileName = `thumbnail_${Date.now()}.${extension}`;\n\nconst meta = $('📝 Парсинг имени').first().json;\n\nreturn {\n  json: {\n    fileName,\n    mimeType,\n    videoTitle: meta.videoTitle,\n    scheduledAt: meta.scheduledAt,\n    scheduledAtMsk: meta.scheduledAtMsk,\n    driveFileId: meta.driveFileId,\n    privacyStatus: meta.privacyStatus,\n    success: true\n  },\n  binary: {\n    thumbnail: {\n      data: base64Data,\n      mimeType,\n      fileName\n    }\n  }\n};"
+      },
+      "id": "extract-cover",
+      "name": "🖼️ Извлечь обложку из ответа",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        272
+      ]
+    },
+    {
+      "parameters": {
         "resource": "video",
         "operation": "upload",
         "title": "={{ $json.videoTitle }}",
         "regionCode": "RU",
         "categoryId": "={{ $json.videoCategory }}",
         "options": {
-          "privacyStatus": "private"
+          "privacyStatus": "={{ $json.privacyStatus }}",
+          "publishAt": "={{ $json.scheduledAt || '' }}"
         }
       },
+      "id": "upload-youtube",
+      "name": "🎥 Загрузить на YouTube",
       "type": "n8n-nodes-base.youTube",
       "typeVersion": 1,
       "position": [
-        -1888,
-        2192
+        -1504,
+        528
       ],
-      "id": "60c7ebc6-ae63-4edd-8dfa-12f3cd6f18ff",
-      "name": "🎥 Загрузить на YouTube",
       "credentials": {
         "youTubeOAuth2Api": {
           "id": "uAQzrCDny8QAApH6",
@@ -77,132 +197,14 @@
         "combineBy": "combineByPosition",
         "options": {}
       },
-      "id": "2caca13f-2a27-4517-80e5-2f8c038ad7dd",
+      "id": "merge-cover-upload",
       "name": "🔀 Ждём обложку + загрузку",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
       "position": [
-        -1440,
-        2000
+        -1056,
+        400
       ]
-    },
-    {
-      "parameters": {
-        "pollTimes": {
-          "item": [
-            {
-              "mode": "everyMinute"
-            }
-          ]
-        },
-        "triggerOn": "specificFolder",
-        "folderToWatch": {
-          "__rl": true,
-          "mode": "id",
-          "value": "=1ZCw5WxKdgfbwL6u19_ezZnuRBuPod_vJ"
-        },
-        "event": "fileCreated",
-        "options": {}
-      },
-      "id": "0c9b9bce-c4c3-46e0-9139-1610dd1f5980",
-      "name": "📁 Google Drive Trigger1",
-      "type": "n8n-nodes-base.googleDriveTrigger",
-      "typeVersion": 1,
-      "position": [
-        -2784,
-        2000
-      ],
-      "credentials": {
-        "googleDriveOAuth2Api": {
-          "id": "wNMKLQ7xHaUW968M",
-          "name": "Google Drive account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "condition-video",
-              "leftValue": "={{ $json.mimeType }}",
-              "rightValue": "video/",
-              "operator": {
-                "type": "string",
-                "operation": "contains"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "7fc8ea3a-b24f-4335-bbf3-1d159dbb7d8d",
-      "name": "🎬 Это видео?1",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        -2560,
-        2000
-      ]
-    },
-    {
-      "parameters": {
-        "operation": "download",
-        "fileId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $json.id }}"
-        },
-        "options": {
-          "fileName": "video"
-        }
-      },
-      "id": "77dedd42-512b-404a-9e84-fd7d9f611425",
-      "name": "⬇️ Скачать видео1",
-      "type": "n8n-nodes-base.googleDrive",
-      "typeVersion": 3,
-      "position": [
-        -2336,
-        2000
-      ],
-      "credentials": {
-        "googleDriveOAuth2Api": {
-          "id": "wNMKLQ7xHaUW968M",
-          "name": "Google Drive account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// Парсим имя файла для метаданных YouTube\n// Формат: \"Заголовок ## Описание ## Категория.mp4\"\n// Или просто: \"Заголовок видео.mp4\"\n\nconst inputItems = $input.all();\nconst results = [];\n\nfor (const item of inputItems) {\n  const fileName = item.json.name || item.json.originalFilename || 'Без названия';\n  \n  // Убираем расширение\n  const nameWithoutExt = fileName.replace(/\\.[^.]+$/, '');\n  \n  // Разбиваем по разделителю ##\n  const parts = nameWithoutExt.split('##').map(s => s.trim());\n  \n  const title = parts[0] || 'Без названия';\n  const description = parts[1] || '';\n  const category = parts[2] || '22'; // 22 = People & Blogs\n  \n  results.push({\n    json: {\n      ...item.json,\n      videoTitle: title,\n      videoDescription: description,\n      videoCategory: category,\n      originalFileName: fileName\n    },\n    binary: item.binary\n  });\n}\n\nreturn results;"
-      },
-      "id": "fa184684-44e9-44fd-8c14-45b1d78d8106",
-      "name": "📝 Парсинг метаданных1",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -2112,
-        2000
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Извлекаем base64 изображение из ответа API\n// и сохраняем videoTitle для последующих нод\n\nconst imageUrl = $json.choices[0].message.images[0].image_url.url;\n\n// Разделяем data:image/png;base64, и саму base64 строку\nconst base64Data = imageUrl.split(',')[1];\n\n// Определяем MIME тип\nconst mimeType = imageUrl.match(/data:([a-zA-Z0-9]+\\/[a-zA-Z0-9-.+]+).*,/)[1];\n\n// Определяем расширение файла\nconst extension = mimeType.includes('png') ? 'png' : 'jpg';\n\n// Создаем имя файла\nconst fileName = `thumbnail_${Date.now()}.${extension}`;\n\n// Сохраняем videoTitle из парсинга для использования после Merge\nconst videoTitle = $('📝 Парсинг метаданных1').item.json.videoTitle;\nconst videoDescription = $('📝 Парсинг метаданных1').item.json.videoDescription;\n\nreturn {\n  json: {\n    fileName: fileName,\n    mimeType: mimeType,\n    videoTitle: videoTitle,\n    videoDescription: videoDescription,\n    success: true\n  },\n  binary: {\n    thumbnail: {\n      data: base64Data,\n      mimeType: mimeType,\n      fileName: fileName\n    }\n  }\n};"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -1664,
-        1792
-      ],
-      "id": "6d1d984e-f0c2-4971-9273-7d0428deb241",
-      "name": "🖼️ Извлечь обложку из ответа2"
     },
     {
       "parameters": {
@@ -226,13 +228,13 @@
           "timeout": 60000
         }
       },
-      "id": "d1baebfe-ae54-4443-839a-4cfd54212e6b",
-      "name": "🖼️ Установить обложку на YouTube1",
+      "id": "set-thumbnail",
+      "name": "🖼️ Установить обложку",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -1216,
-        2000
+        -832,
+        400
       ],
       "credentials": {
         "youTubeOAuth2Api": {
@@ -246,7 +248,13 @@
         "assignments": {
           "assignments": [
             {
-              "id": "set-url",
+              "id": "set-youtube-id",
+              "name": "youtubeId",
+              "value": "={{ $('🔀 Ждём обложку + загрузку').item.json.uploadId }}",
+              "type": "string"
+            },
+            {
+              "id": "set-youtube-url",
               "name": "youtubeUrl",
               "value": "=https://youtube.com/watch?v={{ $('🔀 Ждём обложку + загрузку').item.json.uploadId }}",
               "type": "string"
@@ -256,166 +264,822 @@
               "name": "videoTitle",
               "value": "={{ $('🔀 Ждём обложку + загрузку').item.json.videoTitle }}",
               "type": "string"
+            },
+            {
+              "id": "set-scheduled-at-msk",
+              "name": "scheduledAtMsk",
+              "value": "={{ $('🔀 Ждём обложку + загрузку').item.json.scheduledAtMsk || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "set-drive-file-id",
+              "name": "driveFileId",
+              "value": "={{ $('🔀 Ждём обложку + загрузку').item.json.driveFileId || '' }}",
+              "type": "string"
             }
           ]
         },
         "options": {}
       },
-      "id": "ef8ac0f4-1b7f-4f5f-af00-d3d794bc98d8",
-      "name": "🔗 Сохранить URL1",
+      "id": "save-context",
+      "name": "🔗 Сохранить контекст",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        -992,
-        2000
+        -608,
+        400
       ]
     },
     {
       "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $json.youtubeId }}",
+            "youtube_url": "={{ $json.youtubeUrl }}",
+            "drive_file_id": "={{ $json.driveFileId }}",
+            "title": "={{ $json.videoTitle }}",
+            "scheduled_at": "={{ $json.scheduledAtMsk }}",
+            "status": "uploaded"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ],
+          "schema": [
+            { "id": "youtube_id",       "displayName": "youtube_id",       "type": "string", "canBeUsedToMatch": true,  "required": false, "defaultMatch": true,  "display": true, "removed": false },
+            { "id": "youtube_url",      "displayName": "youtube_url",      "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "drive_file_id",    "displayName": "drive_file_id",    "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "title",            "displayName": "title",            "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "scheduled_at",     "displayName": "scheduled_at",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "tg_text",          "displayName": "tg_text",          "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_html",        "displayName": "blog_html",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_meta",        "displayName": "blog_meta",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_alias",       "displayName": "blog_alias",       "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_parent",      "displayName": "blog_parent",      "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "cover_url",        "displayName": "cover_url",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "cover_local_path", "displayName": "cover_local_path", "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "status",           "displayName": "status",           "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "published_at",     "displayName": "published_at",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "tg_msg_id",        "displayName": "tg_msg_id",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_url",         "displayName": "blog_url",         "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "error",            "displayName": "error",            "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "upsert-uploaded",
+      "name": "📊 Upsert Sheets (uploaded)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -384,
+        400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
         "chatId": "-1003932006777",
-        "text": "=✅ Видео загружено на YouTube!\n\n📹 {{ $json.videoTitle }}\n🔗 {{ $json.youtubeUrl }}\n🎨 Обложка установлена\n\n👉 Открой Claude Code и запусти:\n<code>{{ $json.youtubeUrl }}</code>\n\nСкопируй URL выше → вставь в Claude Code → /repurpose-youtube-video",
+        "text": "={{ $('🔗 Сохранить контекст').item.json.scheduledAtMsk ? '🕐 <b>Видео запланировано</b>\\n\\n📹 ' + $('🔗 Сохранить контекст').item.json.videoTitle + '\\n🔗 ' + $('🔗 Сохранить контекст').item.json.youtubeUrl + '\\n📅 Публикация: ' + $('🔗 Сохранить контекст').item.json.scheduledAtMsk + ' MSK\\n\\n👉 Подготовь контент в Claude Code:\\n<code>/publish-from-script ' + $('🔗 Сохранить контекст').item.json.youtubeUrl + '</code>\\n\\nТексты лягут в очередь — n8n опубликует автоматически.' : '✅ <b>Видео загружено на YouTube</b>\\n\\n📹 ' + $('🔗 Сохранить контекст').item.json.videoTitle + '\\n🔗 ' + $('🔗 Сохранить контекст').item.json.youtubeUrl + '\\n🎨 Обложка установлена\\n\\n👉 В Claude Code:\\n<code>/publish-from-script ' + $('🔗 Сохранить контекст').item.json.youtubeUrl + '</code>' }}",
         "additionalFields": {
           "appendAttribution": false,
+          "disable_web_page_preview": true,
           "parse_mode": "HTML"
         }
       },
-      "id": "71a6da1a-aab1-4647-a550-97b9a2939dc4",
-      "name": "📩 Telegram уведомление1",
+      "id": "notify-uploaded",
+      "name": "📩 TG: Видео загружено",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        -768,
-        2000
+        -160,
+        400
       ],
-      "webhookId": "c7833fc3-c07d-42d3-9eb2-967bd428de67",
+      "webhookId": "notify-uploaded-wh",
       "credentials": {
         "telegramApi": {
           "id": "uXAYhXslRwHtZKD7",
           "name": "Veselkov_smm"
         }
       }
+    },
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "trg-publisher",
+      "name": "⏰ Publisher Trigger (5 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2400,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "options": {}
+      },
+      "id": "read-schedule",
+      "name": "📊 Read Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -2176,
+        1200
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Берём только строки готовые к публикации:\n//   status == 'ready' (нормализуем регистр + trim)\n//   scheduled_at <= now (MSK timezone +03:00)\n// Защищаемся от мусора в ячейках.\n\nconst now = Date.now();\nconst results = [];\n\nfor (const item of $input.all()) {\n  const row = item.json || {};\n  const status = String(row.status || '').trim().toLowerCase();\n  if (status !== 'ready') continue;\n\n  const sched = String(row.scheduled_at || '').trim();\n  if (!sched) continue;\n\n  // \"YYYY-MM-DD HH:MM\" → ISO в MSK\n  const iso = sched.replace(' ', 'T') + ':00+03:00';\n  const ts = new Date(iso).getTime();\n  if (isNaN(ts)) continue;\n  if (ts > now) continue;\n\n  results.push({ json: row });\n}\n\nreturn results;"
+      },
+      "id": "filter-ready-due",
+      "name": "🔍 Filter: ready & due",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1952,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "🔁 Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1728,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $json.youtube_id }}",
+            "status": "publishing"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ],
+          "schema": [
+            { "id": "youtube_id", "displayName": "youtube_id", "type": "string", "canBeUsedToMatch": true,  "required": false, "defaultMatch": true,  "display": true, "removed": false },
+            { "id": "status",     "displayName": "status",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "lock-row",
+      "name": "🔒 Lock row (publishing)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1504,
+        1200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "-1001972632255",
+        "file": "={{ $('🔁 Split In Batches').item.json.cover_url }}",
+        "additionalFields": {
+          "caption": "={{ ($('🔁 Split In Batches').item.json.tg_text || '').length > 1024 ? $('🔁 Split In Batches').item.json.blog_meta : $('🔁 Split In Batches').item.json.tg_text }}",
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg-send-photo",
+      "name": "📨 TG sendPhoto",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1280,
+        1200
+      ],
+      "webhookId": "tg-send-photo-wh",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "long-text",
+              "leftValue": "={{ ($('🔁 Split In Batches').item.json.tg_text || '').length }}",
+              "rightValue": 1024,
+              "operator": {
+                "type": "number",
+                "operation": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-long-tg",
+      "name": "🔀 tg_text > 1024?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "-1001972632255",
+        "text": "={{ $('🔁 Split In Batches').item.json.tg_text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg-send-long",
+      "name": "📨 TG sendMessage (long)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -832,
+        1088
+      ],
+      "webhookId": "tg-send-long-wh",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://veselkov.me/api-publish.html",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  pagetitle: $('🔁 Split In Batches').item.json.title,\n  longtitle: $('🔁 Split In Batches').item.json.title,\n  introtext: $('🔁 Split In Batches').item.json.blog_meta,\n  content: $('🔁 Split In Batches').item.json.blog_html,\n  description: $('🔁 Split In Batches').item.json.blog_meta,\n  alias: $('🔁 Split In Batches').item.json.blog_alias,\n  parent: parseInt($('🔁 Split In Batches').item.json.blog_parent),\n  template: 8,\n  published: 1\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "blog-publish",
+      "name": "📝 Blog publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -608,
+        1200
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME_BLOG_API_CRED_ID",
+          "name": "Veselkov Blog API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('🔁 Split In Batches').item.json.cover_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "cover"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "fetch-cover",
+      "name": "📥 Fetch cover binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -384,
+        1200
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://veselkov.me/api-set-cover.html",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  resource_id: parseInt($('📝 Blog publish').item.json.id),\n  image_data: $binary.cover.data\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "blog-set-cover",
+      "name": "🖼️ Blog set cover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        1200
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME_BLOG_API_CRED_ID",
+          "name": "Veselkov Blog API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $('🔁 Split In Batches').item.json.youtube_id }}",
+            "status": "published",
+            "published_at": "={{ $now.setZone('Europe/Moscow').toFormat('yyyy-LL-dd HH:mm') }}",
+            "tg_msg_id": "={{ $('📨 TG sendPhoto').item.json.result.message_id }}",
+            "blog_url": "={{ $('📝 Blog publish').item.json.url }}"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ],
+          "schema": [
+            { "id": "youtube_id",   "displayName": "youtube_id",   "type": "string", "canBeUsedToMatch": true,  "required": false, "defaultMatch": true,  "display": true, "removed": false },
+            { "id": "status",       "displayName": "status",       "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "published_at", "displayName": "published_at", "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "tg_msg_id",    "displayName": "tg_msg_id",    "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_url",     "displayName": "blog_url",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "mark-published",
+      "name": "✅ Mark published",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        64,
+        1200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1003932006777",
+        "text": "=✅ <b>Опубликовано</b>\n\n📹 {{ $('🔁 Split In Batches').item.json.title }}\n📺 {{ $('🔁 Split In Batches').item.json.youtube_url }}\n💬 TG: msg {{ $('📨 TG sendPhoto').item.json.result.message_id }}\n📝 Блог: {{ $('📝 Blog publish').item.json.url }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "notify-published",
+      "name": "📩 TG: Опубликовано",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        288,
+        1200
+      ],
+      "webhookId": "notify-published-wh",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $('🔁 Split In Batches').item.json.youtube_id }}",
+            "status": "failed",
+            "error": "={{ ($json.error && ($json.error.message || $json.error.description)) || JSON.stringify($json.error || $json) }}"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ],
+          "schema": [
+            { "id": "youtube_id", "displayName": "youtube_id", "type": "string", "canBeUsedToMatch": true,  "required": false, "defaultMatch": true,  "display": true, "removed": false },
+            { "id": "status",     "displayName": "status",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "error",      "displayName": "error",      "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "mark-failed",
+      "name": "❌ Mark failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -384,
+        1456
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1003932006777",
+        "text": "=❌ <b>Ошибка публикации</b>\n\n📹 {{ $('🔁 Split In Batches').item.json.title }}\n📺 {{ $('🔁 Split In Batches').item.json.youtube_url }}\n📅 {{ $('🔁 Split In Batches').item.json.scheduled_at }} MSK\n\n⚠️ {{ ($json.error && ($json.error.message || $json.error.description)) || 'неизвестная ошибка' }}\n\nСтрока помечена <code>status=failed</code>. Для retry — поменяй на <code>ready</code> в Sheets.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "notify-failed",
+      "name": "📩 TG: Ошибка публикации",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        1456
+      ],
+      "webhookId": "notify-failed-wh",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "e5bdfd41-4fad-4442-b707-1d416bd5c3b2",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-lookup",
+      "name": "🔌 Webhook: Lookup (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2400,
+        2000
+      ],
+      "webhookId": "e5bdfd41-4fad-4442-b707-1d416bd5c3b2"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "options": {}
+      },
+      "id": "lookup-read",
+      "name": "📊 Read schedule (lookup)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -2176,
+        2000
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook query доступен в $json.query (n8n nest under body/query/headers).\n// Возвращаем РОВНО ОДИН item — иначе Respond Lookup отправит первый и потеряет остальные.\n\nconst query = $('🔌 Webhook: Lookup (GET)').first().json.query || {};\nconst youtubeId = String(query.youtube_id || '').trim();\n\nif (!youtubeId) {\n  return [{ json: { found: false, row: null, error: 'youtube_id query param missing' } }];\n}\n\nconst rows = $input.all().map(i => i.json).filter(r => r && typeof r === 'object');\nconst match = rows.find(r => String(r.youtube_id || '').trim() === youtubeId);\n\nreturn [{ json: { found: !!match, row: match || null } }];"
+      },
+      "id": "lookup-find",
+      "name": "🔍 Find by youtube_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1952,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "lookup-respond",
+      "name": "↩️ Respond Lookup",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1728,
+        2000
+      ]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "905e8882-caab-4e40-8f42-c6f63524f3e8",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-update",
+      "name": "🔌 Webhook: Update (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2400,
+        2300
+      ],
+      "webhookId": "905e8882-caab-4e40-8f42-c6f63524f3e8"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook payload приходит вложенным в $json.body — распаковываем\n// в плоский item, чтобы Google Sheets defineBelow корректно увидел поля.\n// Принимаем только разрешённые колонки (защита от мусора).\n\nconst ALLOWED = [\n  'youtube_id','youtube_url','drive_file_id','title','scheduled_at',\n  'tg_text','blog_html','blog_meta','blog_alias','blog_parent',\n  'cover_url','cover_local_path','status',\n  'published_at','tg_msg_id','blog_url','error'\n];\n\nconst results = [];\nfor (const item of $input.all()) {\n  const raw = (item.json && item.json.body) ? item.json.body : (item.json || {});\n  if (!raw.youtube_id) {\n    throw new Error('youtube_id отсутствует в теле запроса');\n  }\n\n  const cleaned = {};\n  for (const key of ALLOWED) {\n    if (raw[key] !== undefined && raw[key] !== null) {\n      cleaned[key] = raw[key];\n    }\n  }\n\n  results.push({ json: cleaned });\n}\nreturn results;"
+      },
+      "id": "update-unpack",
+      "name": "📦 Unpack body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2176,
+        2300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "13CleoQqkhSuWg65fX1bH20ScOgYhqzEx4yg20bNU3ZY"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "youtube_id"
+          ],
+          "schema": [
+            { "id": "youtube_id",       "displayName": "youtube_id",       "type": "string", "canBeUsedToMatch": true,  "required": false, "defaultMatch": true,  "display": true, "removed": false },
+            { "id": "youtube_url",      "displayName": "youtube_url",      "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "drive_file_id",    "displayName": "drive_file_id",    "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "title",            "displayName": "title",            "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "scheduled_at",     "displayName": "scheduled_at",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "tg_text",          "displayName": "tg_text",          "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_html",        "displayName": "blog_html",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_meta",        "displayName": "blog_meta",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_alias",       "displayName": "blog_alias",       "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_parent",      "displayName": "blog_parent",      "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "cover_url",        "displayName": "cover_url",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "cover_local_path", "displayName": "cover_local_path", "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "status",           "displayName": "status",           "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "published_at",     "displayName": "published_at",     "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "tg_msg_id",        "displayName": "tg_msg_id",        "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "blog_url",         "displayName": "blog_url",         "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false },
+            { "id": "error",            "displayName": "error",            "type": "string", "canBeUsedToMatch": false, "required": false, "defaultMatch": false, "display": true, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "update-row",
+      "name": "📊 Update row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1952,
+        2300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME_GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, youtube_id: $json.youtube_id, status: $json.status } }}",
+        "options": {}
+      },
+      "id": "update-respond",
+      "name": "↩️ Respond Update",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1728,
+        2300
+      ]
     }
   ],
   "connections": {
-    "🎨 Генерация обложки (AI)": {
-      "main": [
-        [
-          {
-            "node": "🖼️ Извлечь обложку из ответа2",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🎥 Загрузить на YouTube": {
-      "main": [
-        [
-          {
-            "node": "🔀 Ждём обложку + загрузку",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "🔀 Ждём обложку + загрузку": {
-      "main": [
-        [
-          {
-            "node": "🖼️ Установить обложку на YouTube1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "📁 Google Drive Trigger1": {
-      "main": [
-        [
-          {
-            "node": "🎬 Это видео?1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🎬 Это видео?1": {
-      "main": [
-        [
-          {
-            "node": "⬇️ Скачать видео1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "⬇️ Скачать видео1": {
-      "main": [
-        [
-          {
-            "node": "📝 Парсинг метаданных1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "📝 Парсинг метаданных1": {
-      "main": [
-        [
-          {
-            "node": "🎨 Генерация обложки (AI)",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "🎥 Загрузить на YouTube",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🖼️ Извлечь обложку из ответа2": {
-      "main": [
-        [
-          {
-            "node": "🔀 Ждём обложку + загрузку",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🖼️ Установить обложку на YouTube1": {
-      "main": [
-        [
-          {
-            "node": "🔗 Сохранить URL1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "🔗 Сохранить URL1": {
-      "main": [
-        [
-          {
-            "node": "📩 Telegram уведомление1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
+    "📁 Drive Trigger":              { "main": [[{ "node": "🎬 Это видео?",          "type": "main", "index": 0 }]] },
+    "🎬 Это видео?":                 { "main": [[{ "node": "⬇️ Скачать видео",       "type": "main", "index": 0 }]] },
+    "⬇️ Скачать видео":              { "main": [[{ "node": "📝 Парсинг имени",       "type": "main", "index": 0 }]] },
+    "📝 Парсинг имени":              { "main": [[{ "node": "🎨 Генерация обложки (AI)", "type": "main", "index": 0 }, { "node": "🎥 Загрузить на YouTube", "type": "main", "index": 0 }]] },
+    "🎨 Генерация обложки (AI)":     { "main": [[{ "node": "🖼️ Извлечь обложку из ответа", "type": "main", "index": 0 }]] },
+    "🖼️ Извлечь обложку из ответа":  { "main": [[{ "node": "🔀 Ждём обложку + загрузку", "type": "main", "index": 0 }]] },
+    "🎥 Загрузить на YouTube":       { "main": [[{ "node": "🔀 Ждём обложку + загрузку", "type": "main", "index": 1 }]] },
+    "🔀 Ждём обложку + загрузку":    { "main": [[{ "node": "🖼️ Установить обложку",   "type": "main", "index": 0 }]] },
+    "🖼️ Установить обложку":         { "main": [[{ "node": "🔗 Сохранить контекст",  "type": "main", "index": 0 }]] },
+    "🔗 Сохранить контекст":         { "main": [[{ "node": "📊 Upsert Sheets (uploaded)", "type": "main", "index": 0 }]] },
+    "📊 Upsert Sheets (uploaded)":   { "main": [[{ "node": "📩 TG: Видео загружено",  "type": "main", "index": 0 }]] },
+
+    "⏰ Publisher Trigger (5 min)":  { "main": [[{ "node": "📊 Read Sheets",          "type": "main", "index": 0 }]] },
+    "📊 Read Sheets":                { "main": [[{ "node": "🔍 Filter: ready & due", "type": "main", "index": 0 }]] },
+    "🔍 Filter: ready & due":        { "main": [[{ "node": "🔁 Split In Batches",    "type": "main", "index": 0 }]] },
+    "🔁 Split In Batches":           { "main": [[],[{ "node": "🔒 Lock row (publishing)", "type": "main", "index": 0 }]] },
+    "🔒 Lock row (publishing)":      { "main": [[{ "node": "📨 TG sendPhoto",        "type": "main", "index": 0 }]] },
+    "📨 TG sendPhoto":               { "main": [[{ "node": "🔀 tg_text > 1024?",     "type": "main", "index": 0 }],[{ "node": "❌ Mark failed", "type": "main", "index": 0 }]] },
+    "🔀 tg_text > 1024?":            { "main": [[{ "node": "📨 TG sendMessage (long)", "type": "main", "index": 0 }],[{ "node": "📝 Blog publish", "type": "main", "index": 0 }]] },
+    "📨 TG sendMessage (long)":      { "main": [[{ "node": "📝 Blog publish",        "type": "main", "index": 0 }],[{ "node": "❌ Mark failed", "type": "main", "index": 0 }]] },
+    "📝 Blog publish":               { "main": [[{ "node": "📥 Fetch cover binary",  "type": "main", "index": 0 }],[{ "node": "❌ Mark failed", "type": "main", "index": 0 }]] },
+    "📥 Fetch cover binary":         { "main": [[{ "node": "🖼️ Blog set cover",      "type": "main", "index": 0 }],[{ "node": "✅ Mark published", "type": "main", "index": 0 }]] },
+    "🖼️ Blog set cover":             { "main": [[{ "node": "✅ Mark published",      "type": "main", "index": 0 }],[{ "node": "✅ Mark published", "type": "main", "index": 0 }]] },
+    "✅ Mark published":             { "main": [[{ "node": "📩 TG: Опубликовано",    "type": "main", "index": 0 }]] },
+    "📩 TG: Опубликовано":           { "main": [[{ "node": "🔁 Split In Batches",    "type": "main", "index": 0 }]] },
+    "❌ Mark failed":                { "main": [[{ "node": "📩 TG: Ошибка публикации", "type": "main", "index": 0 }]] },
+    "📩 TG: Ошибка публикации":      { "main": [[{ "node": "🔁 Split In Batches",    "type": "main", "index": 0 }]] },
+
+    "🔌 Webhook: Lookup (GET)":      { "main": [[{ "node": "📊 Read schedule (lookup)", "type": "main", "index": 0 }]] },
+    "📊 Read schedule (lookup)":     { "main": [[{ "node": "🔍 Find by youtube_id",  "type": "main", "index": 0 }]] },
+    "🔍 Find by youtube_id":         { "main": [[{ "node": "↩️ Respond Lookup",      "type": "main", "index": 0 }]] },
+
+    "🔌 Webhook: Update (POST)":     { "main": [[{ "node": "📦 Unpack body",         "type": "main", "index": 0 }]] },
+    "📦 Unpack body":                { "main": [[{ "node": "📊 Update row",          "type": "main", "index": 0 }]] },
+    "📊 Update row":                 { "main": [[{ "node": "↩️ Respond Update",      "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner"
   },
   "pinData": {},
   "meta": {
-    "templateCredsSetupCompleted": true,
     "instanceId": "18021caa13c5cb5f2917678412a500e4d96e60027265f9b771588b75d3ff2dae"
   }
 }
