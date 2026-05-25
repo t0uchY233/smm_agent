@@ -26,7 +26,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
         - generate_cover.py → cover_url
         - адаптация текстов для Telegram + блога
         - превью пользователю
-        - POST в n8n webhook → строка в Sheets обновляется до status=ready
+        - POST в n8n webhook → строка в Sheets обновляется до status=review_needed
+        - после правок шефа: повторный запуск с фразой «можно публиковать» перечитывает DOCX и ставит status=ready
 
 [Шаг 4] n8n Publisher Trigger (каждые 5 мин):
         - читает Sheets, фильтрует status=ready и scheduled_at <= now
@@ -42,7 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **`/video-script`** (Шаг 0) — генерация сценария для YouTube. Тема + дата/время публикации → диалог → сценарий → телесуфлёр-DOCX. Имя файла = `YYYY-MM-DD-HHMM-alias.docx` (время публикации зашито в имя). Express mode: тема + детали + дата/время в одном сообщении.
 
-**`/publish-from-script`** (Шаг 3) — подготовка постов из DOCX-сценария и постановка в очередь Sheets. YouTube URL → lookup в Sheets → DOCX → тексты + обложка → POST в n8n webhook. Express mode: вставить URL → автоматический поиск DOCX и подготовка контента.
+**`/publish-from-script`** (Шаг 3) — подготовка постов из DOCX-сценария и постановка в очередь Sheets. YouTube URL → lookup в Sheets → DOCX → тексты + обложка → POST в n8n webhook. Первый прогон ставит `status=review_needed`; после фразы пользователя «можно публиковать» скилл заново читает исправленный DOCX и ставит `status=ready`. Express mode: вставить URL → автоматический поиск DOCX и подготовка контента.
 
 ## Конфигурация
 
@@ -82,7 +83,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blog_parent` | /publish-from-script | подготовка постов |
 | `cover_url` | /publish-from-script | генерация обложки |
 | `cover_local_path` | /publish-from-script | генерация обложки |
-| `status` | оба | uploaded → ready → publishing → published / failed |
+| `status` | оба | uploaded → review_needed → ready → publishing → published / failed |
 | `published_at` | n8n publisher | после успешной публикации |
 | `tg_msg_id` | n8n publisher | после Telegram send |
 | `blog_url` | n8n publisher | после blog publish |
@@ -90,9 +91,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Жизненный цикл строки:**
 1. n8n создаёт строку (status=uploaded) после загрузки видео на YouTube
-2. /publish-from-script дополняет контентом (status=ready)
-3. n8n Publisher Trigger в назначенное время (`scheduled_at <= now`) ставит status=publishing → публикует → status=published
-4. На failure → status=failed, поле error заполнено, alert в служебный канал
+2. /publish-from-script дополняет контентом (status=review_needed)
+3. Шеф правит тот же DOCX-файл на месте
+4. После фразы «шеф внёс правки, можно публиковать <youtube_url>» /publish-from-script перечитывает DOCX и ставит status=ready
+5. n8n Publisher Trigger в назначенное время (`scheduled_at <= now`) ставит status=publishing → публикует → status=published
+6. На failure → status=failed, поле error заполнено, alert в служебный канал
 
 ## n8n endpoints
 
@@ -115,6 +118,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **JSON payload для webhook:** при POST в n8n webhook с большим JSON и кириллицей всегда писать payload во временный файл (`.tmp/sheets_payload.json`) и отправлять через `curl --data-binary @file.json` — иначе проблемы с экранированием в shell.
 - **Telegram caption:** лимит 1024 символа. n8n при превышении отправляет фото отдельно + текст отдельным `sendMessage` (до 4096).
 - **Blog publish:** n8n вызывает `api-publish.html` с `published: 1` → статья сразу появляется на сайте. API всегда создаёт новый ресурс — n8n не вызывает дважды (защита через upsert по youtube_id).
+- **Review gate:** n8n публикует только `status=ready`. `review_needed` означает, что контент подготовлен, но ждёт правок шефа и явного разрешения публикации.
 - **Blog class_key:** `msProduct` (не `modDocument`), иначе статья не появится на главной.
 - **RSS / Дзен:** после публикации статья автоматически попадает в RSS → Яндекс Дзен. Контент должен использовать только разрешённые Дзеном HTML-теги, YouTube как plain link, ≥300 знаков текста.
 - **Telegram chat_id канала:** `-1001972632255` (публикации).
