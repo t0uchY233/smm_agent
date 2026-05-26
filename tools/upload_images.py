@@ -1,5 +1,5 @@
 """
-Загрузка изображений на veselkov.me через ApiUpload.
+Загрузка изображений в WordPress Media Library.
 
 Использование:
   python tools/upload_images.py image1.jpg image2.png
@@ -13,16 +13,16 @@ import os
 import json
 import base64
 import argparse
-import urllib.request
-import urllib.error
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from dotenv import load_dotenv
 load_dotenv()
 
-API_URL = 'https://veselkov.me/api-upload.html'
-API_KEY = os.getenv('BLOG_API_KEY')
+try:
+    from wordpress_media import WordPressMediaError, upload_media_bytes
+except ImportError:
+    from tools.wordpress_media import WordPressMediaError, upload_media_bytes
 
 
 def extract_images_from_docx(docx_path):
@@ -93,41 +93,34 @@ def extract_images_from_files(file_paths):
 
 
 def upload_images(images):
-    """Загружает изображения через ApiUpload, возвращает ответ сервера."""
-    if not API_KEY:
-        print("Ошибка: BLOG_API_KEY не задан в .env", file=sys.stderr)
-        sys.exit(1)
+    """Загружает изображения в WordPress, возвращает совместимый JSON."""
+    uploaded = []
 
-    payload = {'images': images}
-    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    for img in images:
+        try:
+            binary = base64.b64decode(img['data'])
+            result = upload_media_bytes(binary, img['filename'], img['content_type'])
+        except (WordPressMediaError, KeyError) as e:
+            print(f"Ошибка загрузки {img.get('filename', 'image')}: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    req = urllib.request.Request(
-        API_URL,
-        data=data,
-        headers={
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-API-Key': API_KEY,
-        },
-        method='POST',
-    )
+        uploaded.append({
+            'filename': result['filename'],
+            'url': result['source_url'],
+            'path': result['source_url'],
+            'media_id': result['id'],
+            'size': result['size'],
+        })
 
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode('utf-8')
-            # MODX может оборачивать JSON в <p> теги
-            raw = raw.strip()
-            if raw.startswith('<p>') and raw.endswith('</p>'):
-                raw = raw[3:-4]
-            body = json.loads(raw)
-            return body
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8')
-        print(f"HTTP {e.code}: {error_body}", file=sys.stderr)
-        sys.exit(1)
+    return {
+        'success': True,
+        'uploaded': uploaded,
+        'count': len(uploaded),
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Загрузка изображений на veselkov.me')
+    parser = argparse.ArgumentParser(description='Загрузка изображений в WordPress Media Library')
     parser.add_argument('files', nargs='*', help='Файлы изображений для загрузки')
     parser.add_argument('--from-docx', help='Извлечь и загрузить изображения из DOCX файла')
     parser.add_argument('--dry-run', action='store_true', help='Показать что будет загружено, без отправки')

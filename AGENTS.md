@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # SMM Agent — Unified Content Pipeline
 
-Перепрофилирование YouTube-видео в контент для Telegram-канала, блога veselkov.me и Яндекс Дзен (через RSS блога) с **отложенной публикацией по расписанию**.
+Перепрофилирование YouTube-видео в контент для Telegram-канала, WordPress-блога и Яндекс Дзен (через RSS блога) с **отложенной публикацией по расписанию**.
 
 ## Pipeline: полный цикл
 
@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 [Шаг 4] n8n Publisher Trigger (каждые 5 мин):
         - читает Sheets, фильтрует status=ready и scheduled_at <= now
-        - публикует в Telegram канал и блог veselkov.me
+        - публикует в Telegram канал и WordPress-блог
         - обновляет статус → published, шлёт уведомление в служебный канал
 ```
 
@@ -49,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Файл `.env`** содержит ключи:
 - `TELEGRAM_BOT_TOKEN` — от @BotFather (используется как контроль длины caption)
-- `BLOG_API_KEY` — для veselkov.me API (потребляет n8n)
+- `WORDPRESS_BASE_URL`, `WORDPRESS_API_BASE_URL`, `WORDPRESS_USERNAME`, `WORDPRESS_APP_PASSWORD` — для WordPress REST API
 - `OPENROUTER_API_KEY` — для генерации обложек
 - `N8N_BASE_URL`, `N8N_WEBHOOK_LOOKUP`, `N8N_WEBHOOK_UPDATE` — endpoint'ы n8n
 - `SMM_SCHEDULE_SPREADSHEET_ID` — ID Google Sheets очереди
@@ -81,7 +81,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `blog_meta` | /publish-from-script | подготовка постов |
 | `blog_alias` | /publish-from-script | подготовка постов |
 | `blog_parent` | /publish-from-script | подготовка постов |
-| `cover_url` | /publish-from-script | генерация обложки |
+| `cover_url` | /publish-from-script | URL обложки в WordPress Media Library |
 | `cover_local_path` | /publish-from-script | генерация обложки |
 | `status` | оба | uploaded → review_needed → ready → publishing → published / failed |
 | `published_at` | n8n publisher | после успешной публикации |
@@ -117,10 +117,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Windows / Кириллица:** при вызове Python через Bash всегда добавлять `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')` во избежание ошибок cp1251.
 - **JSON payload для webhook:** при POST в n8n webhook с большим JSON и кириллицей всегда писать payload во временный файл (`.tmp/sheets_payload.json`) и отправлять через `curl --data-binary @file.json` — иначе проблемы с экранированием в shell.
 - **Telegram caption:** лимит 1024 символа. n8n при превышении отправляет фото отдельно + текст отдельным `sendMessage` (до 4096).
-- **Blog publish:** n8n вызывает `api-publish.html` с `published: 1` → статья сразу появляется на сайте. API всегда создаёт новый ресурс — n8n не вызывает дважды (защита через upsert по youtube_id).
+- **Blog publish:** n8n публикует статью в WordPress. Старый `veselkov.me` API больше не используется.
 - **Review gate:** n8n публикует только `status=ready`. `review_needed` означает, что контент подготовлен, но ждёт правок шефа и явного разрешения публикации.
 - **Blog class_key:** `msProduct` (не `modDocument`), иначе статья не появится на главной.
-- **RSS / Дзен:** после публикации статья автоматически попадает в RSS → Яндекс Дзен. Контент должен использовать только разрешённые Дзеном HTML-теги, YouTube как plain link, ≥300 знаков текста.
+- **RSS / Дзен:** после публикации WordPress-статья автоматически попадает в RSS → Яндекс Дзен. Контент должен использовать только разрешённые Дзеном HTML-теги, YouTube как plain link, ≥300 знаков текста.
 - **Telegram chat_id канала:** `-1001972632255` (публикации).
 - **n8n служебный канал:** `-1003932006777` (уведомления о загрузке и публикации, alerts).
 - **Имя DOCX:** `/video-script` сохраняет в `.tmp/teleprompter/YYYY-MM-DD-HHMM-alias.docx`. Время в имени = время отложенной публикации MSK. По нему `/publish-from-script` находит файл при lookup в Sheets.

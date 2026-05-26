@@ -1,4 +1,4 @@
-# n8n Migration Guide — импорт нового n8n.json
+# n8n Migration Guide — импорт workflow
 
 Один объединённый workflow заменяет старые `n8n.json` + `n8n_actual.json`. Делает 4 вещи: загружает видео из Drive на YouTube (scheduled), читает Sheets каждые 5 минут и публикует в Telegram + блог, отдаёт два webhook'а для Claude Code.
 
@@ -8,7 +8,12 @@
 
 ## Шаг 2. Импорт
 
-n8n UI → **Workflows → Import from File** → выбрать `F:\program\claude_code_project\smm_agent\n8n.json`.
+n8n UI → **Workflows → Import from File**.
+
+Актуальный publisher для WordPress:
+`F:\program\claude_code_project\smm_agent\n8n-wordpress-publisher.json`.
+
+Старый `n8n.json` оставлен как базовый объединённый workflow, но его Blog API-ветка использует устаревший `veselkov.me` API.
 
 ## Шаг 3. Заменить credential ID для Google Sheets
 
@@ -24,18 +29,14 @@ n8n UI → **Workflows → Import from File** → выбрать `F:\program\cla
 
 Остальные credentials (Google Drive, YouTube, OpenRouter, Telegram) уже прописаны — должны подтянуться автоматически из существующих n8n credentials.
 
-## Шаг 4. Создать Header Auth credential для блога
+## Шаг 4. Проверить WordPress credential
 
 В n8n UI:
-- **Credentials → New → Header Auth**
-- **Name:** `Veselkov Blog API`
-- **Header Name:** `X-API-Key`
-- **Header Value:** `NiyWVKGUmi3VQfExifLiD6pZQG_9vTID` (это `BLOG_API_KEY` из локального `.env`)
-- Save
+- **Credentials → WordPress API**
+- **Name:** `Wordpress account`
+- Указать WordPress URL, username и application password.
 
-После создания — открыть узлы `📝 Blog publish` и `🖼️ Blog set cover` и в поле **Credential** выбрать `Veselkov Blog API` (placeholder `REPLACE_ME_BLOG_API_CRED_ID` подменится на реальный ID).
-
-В файле workflow `Content-Type: application/json; charset=utf-8` оставлен как обычный header — n8n догенерирует `X-API-Key` из credential.
+В `n8n-wordpress-publisher.json` узел `📝 Blog publish` уже ссылается на credential `Wordpress account`. Если ID не совпал после импорта — выберите credential вручную в ноде.
 
 ## Шаг 5. Активация
 
@@ -66,8 +67,9 @@ curl -X POST "https://bigetn8n.casacam.net/webhook/905e8882-caab-4e40-8f42-c6f63
 1. Через `/video-script` создать DOCX с датой публикации now+15 минут.
 2. Загрузить mp4 в Drive с тем же именем без расширения (`YYYY-MM-DD-HHMM-alias.mp4`).
 3. Через 1-2 минуты — Telegram-уведомление в `-1003932006777` со ссылкой на YouTube + командой `/publish-from-script`.
-4. Запустить эту команду в Claude Code → строка в Sheets обновится со `status=ready`.
-5. В назначенное время (через 15 мин) — пост в `-1001972632255` + статья на блоге + уведомление «✅ Опубликовано» в служебный канал.
+4. Запустить эту команду в Claude Code → строка в Sheets обновится со `status=review_needed`.
+5. После правок DOCX написать в Codex: `шеф внёс правки, можно публиковать <youtube_url>` → строка обновится до `status=ready`.
+6. В назначенное время — пост в `-1001972632255` + статья в WordPress + уведомление «✅ Опубликовано» в служебный канал.
 
 ## Что встроено в новый workflow (изменения относительно legacy)
 
@@ -76,7 +78,8 @@ curl -X POST "https://bigetn8n.casacam.net/webhook/905e8882-caab-4e40-8f42-c6f63
 - **Все Sheets-узлы** имеют явный `defineBelow` mapping и `matchingColumns: ["youtube_id"]` — нет риска создать дубль строки.
 - **`🔒 Lock row (publishing)`** ставит `status=publishing` перед публикацией — защита от parallel runs.
 - **`✅ Mark published`** ставит `status=published`, `published_at` (текущее время MSK), `tg_msg_id`, `blog_url`.
-- **`❌ Mark failed`** ставит `status=failed` и пишет error message. Подключён ко всем точкам отказа: TG send, Blog publish, Fetch cover.
+- **`❌ Mark failed`** ставит `status=failed` и пишет error message. Подключён к точкам отказа: TG send и Blog publish.
+- **WordPress publish:** `📝 Blog publish` создаёт post через `n8n-nodes-base.wordpress`; старые `api-publish.html` и `api-set-cover.html` не используются.
 - **Telegram уведомление об uploaded** упоминает `/publish-from-script` (не старый `/repurpose-youtube-video`).
 - **Reminder ветка удалена** — никаких напоминаний за 1-3 часа до публикации.
 - **Webhooks без auth** (как просили): `httpMethod: GET/POST` без `authentication: headerAuth`.

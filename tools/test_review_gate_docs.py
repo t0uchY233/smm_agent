@@ -24,7 +24,8 @@ def test_publish_from_script_requires_review_gate_before_ready():
 
 
 def test_project_docs_describe_review_needed_status():
-    docs = Path("CLAUDE.md").read_text(encoding="utf-8")
+    docs_path = Path("AGENTS.md") if Path("AGENTS.md").exists() else Path("CLAUDE.md")
+    docs = docs_path.read_text(encoding="utf-8")
     command = Path(".claude/commands/publish-from-script.md").read_text(encoding="utf-8")
 
     assert "review_needed" in docs
