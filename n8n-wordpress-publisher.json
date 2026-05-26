@@ -120,21 +120,22 @@
     {
       "parameters": {
         "resource": "message",
-        "operation": "sendPhoto",
+        "operation": "sendVideo",
         "chatId": "-1001972632255",
-        "file": "={{ $('🔁 Split In Batches').item.json.cover_url }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
         "additionalFields": {
           "caption": "={{ ((($('🔁 Split In Batches').item.json.tg_text || '').length > 1024 ? $('🔁 Split In Batches').item.json.blog_meta : $('🔁 Split In Batches').item.json.tg_text) || '').replace(/\\{BLOG_URL\\}/g, ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url)) }}",
           "parse_mode": "HTML",
           "appendAttribution": false
         }
       },
-      "id": "tg-send-photo",
-      "name": "📨 TG sendPhoto",
+      "id": "tg-send-video",
+      "name": "📨 TG sendVideo",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        -1280,
+        -160,
         800
       ],
       "onError": "continueErrorOutput",
@@ -172,7 +173,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        -1056,
+        64,
         800
       ]
     },
@@ -193,7 +194,7 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        -832,
+        288,
         688
       ],
       "onError": "continueErrorOutput",
@@ -250,7 +251,7 @@
             "youtube_id": "={{ $('🔁 Split In Batches').item.json.youtube_id }}",
             "status": "published",
             "published_at": "={{ $now.setZone('Europe/Moscow').toFormat('yyyy-LL-dd HH:mm') }}",
-            "tg_msg_id": "={{ $('📨 TG sendPhoto').item.json.result.message_id }}",
+            "tg_msg_id": "={{ $('📨 TG sendVideo').item.json.result.message_id }}",
             "blog_url": "={{ ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url) }}"
           },
           "matchingColumns": [
@@ -264,7 +265,7 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        64,
+        512,
         800
       ],
       "credentials": {
@@ -277,7 +278,7 @@
     {
       "parameters": {
         "chatId": "-1003932006777",
-        "text": "=✅ Опубликовано\n\n📹 {{ $('🔁 Split In Batches').item.json.title }}\n📺 {{ $('🔁 Split In Batches').item.json.youtube_url }}\n💬 TG: msg {{ $('📨 TG sendPhoto').item.json.result.message_id }}\n📝 Блог: {{ ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url) }}",
+        "text": "=✅ Опубликовано\n\n📹 {{ $('🔁 Split In Batches').item.json.title }}\n📺 {{ $('🔁 Split In Batches').item.json.youtube_url }}\n💬 TG: msg {{ $('📨 TG sendVideo').item.json.result.message_id }}\n📝 Блог: {{ ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url) }}",
         "additionalFields": {
           "appendAttribution": false,
           "disable_web_page_preview": true
@@ -288,7 +289,7 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        288,
+        736,
         800
       ],
       "credentials": {
@@ -329,7 +330,7 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        -384,
+        -160,
         1120
       ],
       "credentials": {
@@ -354,7 +355,7 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        -160,
+        64,
         1120
       ],
       "credentials": {
@@ -658,6 +659,34 @@
         -1952,
         2240
       ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('🔁 Split In Batches').item.json.drive_file_id }}"
+        },
+        "options": {
+          "fileName": "={{ (($('🔁 Split In Batches').item.json.blog_alias || $('🔁 Split In Batches').item.json.youtube_id || 'telegram-video') + '.mp4') }}"
+        }
+      },
+      "id": "download-tg-video",
+      "name": "⬇️ Download TG video",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -384,
+        800
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueErrorOutput"
     }
   ],
   "connections": {
@@ -716,24 +745,6 @@
         ]
       ]
     },
-    "📨 TG sendPhoto": {
-      "main": [
-        [
-          {
-            "node": "🔀 tg_text > 1024?",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "❌ Mark as failed",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "🔀 tg_text > 1024?": {
       "main": [
         [
@@ -774,7 +785,7 @@
       "main": [
         [
           {
-            "node": "📨 TG sendPhoto",
+            "node": "⬇️ Download TG video",
             "type": "main",
             "index": 0
           }
@@ -936,6 +947,42 @@
         [
           {
             "node": "↩️ Respond Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⬇️ Download TG video": {
+      "main": [
+        [
+          {
+            "node": "📨 TG sendVideo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Mark as failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📨 TG sendVideo": {
+      "main": [
+        [
+          {
+            "node": "🔀 tg_text > 1024?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Mark as failed",
             "type": "main",
             "index": 0
           }

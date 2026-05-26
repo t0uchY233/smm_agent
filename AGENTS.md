@@ -116,7 +116,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Windows / Кириллица:** при вызове Python через Bash всегда добавлять `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')` во избежание ошибок cp1251.
 - **JSON payload для webhook:** при POST в n8n webhook с большим JSON и кириллицей всегда писать payload во временный файл (`.tmp/sheets_payload.json`) и отправлять через `curl --data-binary @file.json` — иначе проблемы с экранированием в shell.
-- **Telegram caption:** лимит 1024 символа. n8n при превышении отправляет фото отдельно + текст отдельным `sendMessage` (до 4096).
+- **Telegram video caption:** n8n скачивает исходный `.mp4` из Google Drive по `drive_file_id` и отправляет его через `sendVideo`. Caption лимит 1024 символа; при превышении n8n ставит в caption `blog_meta`, а полный текст отправляет отдельным `sendMessage` (до 4096).
 - **Blog publish:** n8n публикует статью в WordPress. Старый `veselkov.me` API больше не используется.
 - **Review gate:** n8n публикует только `status=ready`. `review_needed` означает, что контент подготовлен, но ждёт правок шефа и явного разрешения публикации.
 - **Blog class_key:** `msProduct` (не `modDocument`), иначе статья не появится на главной.
