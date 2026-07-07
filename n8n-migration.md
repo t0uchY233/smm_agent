@@ -1,91 +1,97 @@
-# n8n Migration Guide — импорт нового n8n.json
+# n8n Migration Guide
 
-Один объединённый workflow заменяет старые `n8n.json` + `n8n_actual.json`. Делает 4 вещи: загружает видео из Drive на YouTube (scheduled), читает Sheets каждые 5 минут и публикует в Telegram + блог, отдаёт два webhook'а для Claude Code.
+This project now uses two importable n8n workflows:
 
-## Шаг 1. Бэкап старого workflow в n8n UI
+1. `n8n.json` - uploader + lookup/update webhooks.
+2. `n8n-wordpress-publisher.json` - scheduled Telegram + WordPress publisher.
 
-Если старый workflow уже импортирован — **деактивируйте его** (toggle Active → off), но не удаляйте, пока новый не заработает. Потом можно удалить.
+Codex prepares content and updates Google Sheets through webhooks. n8n is the only component that uploads/schedules/publishes.
 
-## Шаг 2. Импорт
+## Filename Contract
 
-n8n UI → **Workflows → Import from File** → выбрать `F:\program\claude_code_project\smm_agent\n8n.json`.
+Rendered MP4 files uploaded to Google Drive must use:
 
-## Шаг 3. Заменить credential ID для Google Sheets
+```text
+YYYY-MM-DD-HHMM-Русский заголовок.mp4
+```
 
-В файле во всех узлах Google Sheets стоит placeholder `REPLACE_ME_GOOGLE_SHEETS_CRED_ID`. Откройте каждый Sheets-узел и выберите свой `googleSheetsOAuth2Api` credential из дропдауна. Узлы Sheets:
+Example:
 
-1. `📊 Upsert Sheets (uploaded)` (uploader)
-2. `📊 Read Sheets` (publisher)
-3. `🔒 Lock row (publishing)` (publisher)
-4. `✅ Mark published` (publisher)
-5. `❌ Mark failed` (publisher)
-6. `📊 Read schedule (lookup)` (lookup webhook)
-7. `📊 Update row` (update webhook)
+```text
+2026-06-25-1400-Топ 5 экономических инструментов.mp4
+```
 
-Остальные credentials (Google Drive, YouTube, OpenRouter, Telegram) уже прописаны — должны подтянуться автоматически из существующих n8n credentials.
+`n8n.json` parses the date/time from the prefix, keeps the Russian title tail as the YouTube title, and writes `scheduled_at` to Sheets as `YYYY-MM-DD HH:MM` in MSK.
 
-## Шаг 4. Создать Header Auth credential для блога
+Upload only the rendered MP4 from `.tmp/rendered/`, not raw camera footage.
 
-В n8n UI:
-- **Credentials → New → Header Auth**
-- **Name:** `Veselkov Blog API`
-- **Header Name:** `X-API-Key`
-- **Header Value:** `NiyWVKGUmi3VQfExifLiD6pZQG_9vTID` (это `BLOG_API_KEY` из локального `.env`)
-- Save
+## Import
 
-После создания — открыть узлы `📝 Blog publish` и `🖼️ Blog set cover` и в поле **Credential** выбрать `Veselkov Blog API` (placeholder `REPLACE_ME_BLOG_API_CRED_ID` подменится на реальный ID).
+In n8n UI:
 
-В файле workflow `Content-Type: application/json; charset=utf-8` оставлен как обычный header — n8n догенерирует `X-API-Key` из credential.
+1. Open **Workflows -> Import from File**.
+2. Import `n8n.json`.
+3. Import `n8n-wordpress-publisher.json`.
+4. Keep old workflows inactive until the new pair is verified.
 
-## Шаг 5. Активация
+## Credentials
 
-Toggle **Active** в правом верхнем углу. Должны загореться зелёные индикаторы у всех 4 триггеров:
+After import, open every credential-bearing node and select the local n8n credential:
 
-- `📁 Drive Trigger` (polling каждую минуту)
-- `⏰ Publisher Trigger (5 min)` (раз в 5 минут)
-- `🔌 Webhook: Lookup (GET)` (на пути `/webhook/e5bdfd41-4fad-4442-b707-1d416bd5c3b2`)
-- `🔌 Webhook: Update (POST)` (на пути `/webhook/905e8882-caab-4e40-8f42-c6f63524f3e8`)
+- Google Drive: Drive trigger, video download/upload/download nodes.
+- YouTube OAuth: `🎥 Загрузить на YouTube`.
+- Google Sheets: all schedule read/update/upsert nodes.
+- Telegram: notification and publish nodes.
+- WordPress: `📝 Blog publish`.
+- OpenRouter: thumbnail generation node in `n8n.json`, if used by the imported workflow.
 
-## Проверка после активации
+Do not reintroduce the old `veselkov.me/api-publish.html` or `api-set-cover.html` HTTP API nodes. Publishing to the blog must use the WordPress node.
 
-**Test Lookup webhook:**
+## Webhooks
+
+Current `.env` endpoints:
+
+```text
+N8N_WEBHOOK_LOOKUP=/webhook/e5bdfd41-4fad-4442-b707-1d416bd5c3b2
+N8N_WEBHOOK_UPDATE=/webhook/905e8882-caab-4e40-8f42-c6f63524f3e8
+```
+
+Lookup smoke test:
+
 ```bash
 curl "https://bigetn8n.casacam.net/webhook/e5bdfd41-4fad-4442-b707-1d416bd5c3b2?youtube_id=test123"
 ```
-Ожидание: `{"found": false, "row": null}`.
 
-**Test Update webhook (создаст тестовую строку):**
+Update smoke test creates or updates a test row:
+
 ```bash
 curl -X POST "https://bigetn8n.casacam.net/webhook/905e8882-caab-4e40-8f42-c6f63524f3e8" \
   -H "Content-Type: application/json" \
-  -d '{"youtube_id":"test123","title":"Test","status":"ready","scheduled_at":"2030-01-01 00:00"}'
+  --data-binary '{"youtube_id":"test123","title":"Test","status":"review_needed","scheduled_at":"2030-01-01 00:00"}'
 ```
-Ожидание: `{"ok": true, "youtube_id": "test123", "status": "ready"}`. После теста удалить строку вручную в Sheets.
 
-**End-to-end:**
-1. Через `/video-script` создать DOCX с датой публикации now+15 минут.
-2. Загрузить mp4 в Drive с тем же именем без расширения (`YYYY-MM-DD-HHMM-alias.mp4`).
-3. Через 1-2 минуты — Telegram-уведомление в `-1003932006777` со ссылкой на YouTube + командой `/publish-from-script`.
-4. Запустить эту команду в Claude Code → строка в Sheets обновится со `status=ready`.
-5. В назначенное время (через 15 мин) — пост в `-1001972632255` + статья на блоге + уведомление «✅ Опубликовано» в служебный канал.
+Delete the test row from Sheets after checking.
 
-## Что встроено в новый workflow (изменения относительно legacy)
+## Sheets
 
-- **Парсер имени mp4** упрощён до regex `^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})-(.+)\.mp4$`. Категория YouTube зафиксирована на `22` (People & Blogs).
-- **YouTube `publishAt`** автоматически проставляется когда дата в имени валидна и в будущем (минимум now+15 мин). Privacy = `private` для scheduled, `public` для immediate.
-- **Все Sheets-узлы** имеют явный `defineBelow` mapping и `matchingColumns: ["youtube_id"]` — нет риска создать дубль строки.
-- **`🔒 Lock row (publishing)`** ставит `status=publishing` перед публикацией — защита от parallel runs.
-- **`✅ Mark published`** ставит `status=published`, `published_at` (текущее время MSK), `tg_msg_id`, `blog_url`.
-- **`❌ Mark failed`** ставит `status=failed` и пишет error message. Подключён ко всем точкам отказа: TG send, Blog publish, Fetch cover.
-- **Telegram уведомление об uploaded** упоминает `/publish-from-script` (не старый `/repurpose-youtube-video`).
-- **Reminder ветка удалена** — никаких напоминаний за 1-3 часа до публикации.
-- **Webhooks без auth** (как просили): `httpMethod: GET/POST` без `authentication: headerAuth`.
-- **Update webhook** имеет `📦 Unpack body` ноду — она распаковывает payload из `$json.body` в плоский item (без этого Sheets autoMapInputData не видит поля). Также фильтрует только разрешённые колонки (защита от мусора).
+Use `smm-schedule-template.xlsx` or create a sheet named `schedule` with the column order documented in `AGENTS.md`.
 
-## Backup
+The lifecycle is:
 
-Старые файлы сохранены:
-- `n8n.legacy.json` — старый uploader-only workflow
-- `n8n_actual.legacy.json` — старый publisher workflow
+```text
+uploaded -> review_needed -> ready -> publishing -> published
+                                      \-> failed
+```
 
-Если что-то пошло не так — импортируете обратно из них.
+The publisher workflow only publishes rows with `status=ready` and `scheduled_at <= now`.
+
+## End-to-End Check
+
+1. Create a DOCX with `/video-script`; it should be named `YYYY-MM-DD-HHMM-Русский заголовок.docx`.
+2. Record raw video.
+3. Render visuals with `/render-docx-visuals raw.mp4 --docx <docx_path>`.
+4. Upload `.tmp/rendered/YYYY-MM-DD-HHMM-Русский заголовок.mp4` to Google Drive.
+5. Wait for the service-channel YouTube upload notification.
+6. Run `/publish-from-script <youtube_url>` to prepare content; Sheets status becomes `review_needed`.
+7. After explicit approval, run `/publish-from-script шеф внёс правки, можно публиковать <youtube_url>`; Sheets status becomes `ready`.
+8. At scheduled time, verify Telegram video, WordPress post, `published_at`, `tg_msg_id`, and `blog_url`.

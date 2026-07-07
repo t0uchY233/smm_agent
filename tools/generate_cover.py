@@ -7,7 +7,7 @@
   python tools/generate_cover.py "Заголовок статьи" --upload --style youtube
 
 Флаги:
-  --upload     Загрузить на veselkov.me через ApiUpload и вернуть URL
+  --upload     Загрузить в WordPress Media Library и вернуть URL
   --style      youtube | blog (по умолчанию blog)
   --output     Путь для локального сохранения (по умолчанию .tmp/covers/)
   --no-face    Не использовать референсное лицо
@@ -25,14 +25,20 @@ import urllib.error
 import re
 import time
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+try:
+    from wordpress_media import WordPressMediaError, upload_media_bytes
+except ImportError:
+    from tools.wordpress_media import WordPressMediaError, upload_media_bytes
 
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - keeps helper importable without python-dotenv
+    load_dotenv = None
+
+if load_dotenv:
+    load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
-BLOG_API_KEY = os.getenv('BLOG_API_KEY')
-UPLOAD_URL = 'https://veselkov.me/api-upload.html'
 OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 # Референсное фото Веселкова
@@ -65,6 +71,11 @@ PROMPTS = {
         'Без фотографий людей. Минималистичный современный дизайн.'
     ),
 }
+
+
+def configure_utf8_stdout():
+    if sys.stdout and hasattr(sys.stdout, 'buffer') and (sys.stdout.encoding or '').lower() not in ('utf-8', 'utf8'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def generate_image(title, style='blog', use_face=True):
@@ -102,7 +113,7 @@ def generate_image(title, style='blog', use_face=True):
         headers={
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-            'HTTP-Referer': 'https://veselkov.me',
+            'HTTP-Referer': os.getenv('WORDPRESS_BASE_URL', 'https://wordpress.org'),
             'X-Title': 'Blog Cover Generator',
         },
         method='POST',
@@ -198,54 +209,24 @@ def save_locally(image_b64, title, output_dir):
     return filepath, filename
 
 
-def upload_to_blog(image_b64, filename):
-    """Загружает обложку на veselkov.me через ApiUpload."""
-    if not BLOG_API_KEY:
-        print('Ошибка: BLOG_API_KEY не задан в .env', file=sys.stderr)
-        sys.exit(1)
-
-    payload = {
-        'images': [{
-            'filename': filename,
-            'data': image_b64,
-            'content_type': 'image/png',
-        }]
-    }
-
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        UPLOAD_URL,
-        data=data,
-        headers={
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-API-Key': BLOG_API_KEY,
-        },
-        method='POST',
-    )
-
+def upload_to_wordpress(image_b64, filename):
+    """Загружает обложку в WordPress Media Library."""
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode('utf-8').strip()
-            if raw.startswith('<p>') and raw.endswith('</p>'):
-                raw = raw[3:-4]
-            result = json.loads(raw)
-            if result.get('success') and result.get('uploaded'):
-                url = result['uploaded'][0]['url']
-                print(f'Загружено: {url}', file=sys.stderr)
-                return url
-            else:
-                print(f'Ошибка загрузки: {json.dumps(result, ensure_ascii=False)}', file=sys.stderr)
-                sys.exit(1)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        print(f'Upload HTTP {e.code}: {body[:500]}', file=sys.stderr)
+        result = upload_media_bytes(base64.b64decode(image_b64), filename, 'image/png')
+    except WordPressMediaError as e:
+        print(f'Ошибка загрузки в WordPress: {e}', file=sys.stderr)
         sys.exit(1)
+
+    print(f'Загружено в WordPress: {result["source_url"]}', file=sys.stderr)
+    return result
 
 
 def main():
+    configure_utf8_stdout()
+
     parser = argparse.ArgumentParser(description='Генерация обложки для статьи блога')
     parser.add_argument('title', help='Заголовок статьи')
-    parser.add_argument('--upload', action='store_true', help='Загрузить на veselkov.me')
+    parser.add_argument('--upload', action='store_true', help='Загрузить в WordPress Media Library')
     parser.add_argument('--style', choices=['blog', 'youtube'], default='blog', help='Стиль обложки')
     parser.add_argument('--output', default='.tmp/covers', help='Директория для локального сохранения')
     parser.add_argument('--no-face', action='store_true', help='Без референсного лица')
@@ -264,8 +245,9 @@ def main():
 
     # Загрузка на сервер
     if args.upload:
-        url = upload_to_blog(image_b64, filename)
-        result['url'] = url
+        wp_media = upload_to_wordpress(image_b64, filename)
+        result['url'] = wp_media['source_url']
+        result['media_id'] = wp_media['id']
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

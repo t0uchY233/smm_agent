@@ -1,0 +1,997 @@
+{
+  "name": "SMM Publisher WordPress",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "trigger-publisher",
+      "name": "⏰ Publisher Trigger (5 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2400,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "options": {}
+      },
+      "id": "read-sheets-publisher",
+      "name": "📊 Read Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -2176,
+        800
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Оставляем строки готовые к публикации: status=ready и scheduled_at <= now() в MSK\nconst now = Date.now();\nconst results = [];\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  if (row.status !== 'ready') continue;\n  if (!row.scheduled_at) continue;\n\n  // scheduled_at формат: \"2026-05-01 14:00\" (MSK)\n  const iso = String(row.scheduled_at).trim().replace(' ', 'T') + ':00+03:00';\n  const scheduled = new Date(iso).getTime();\n  if (isNaN(scheduled)) continue;\n  if (scheduled > now) continue;\n\n  results.push({ json: row });\n}\n\nreturn results;"
+      },
+      "id": "filter-ready",
+      "name": "🔍 Filter: ready & due",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1952,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "🔁 Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1728,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $json.youtube_id }}",
+            "status": "publishing"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ]
+        },
+        "options": {}
+      },
+      "id": "lock-current-row",
+      "name": "🔒 Lock current row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1504,
+        800
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendVideo",
+        "chatId": "-1001972632255",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "caption": "={{ ((($('🔁 Split In Batches').item.json.tg_text || '').length > 1024 ? $('🔁 Split In Batches').item.json.blog_meta : $('🔁 Split In Batches').item.json.tg_text) || '').replace(/\\{BLOG_URL\\}/g, ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url)) }}",
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "id": "tg-send-video",
+      "name": "📨 TG sendVideo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        800
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "long-text",
+              "leftValue": "={{ ($('🔁 Split In Batches').item.json.tg_text || '').length }}",
+              "rightValue": 1024,
+              "operator": {
+                "type": "number",
+                "operation": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-long-text",
+      "name": "🔀 tg_text > 1024?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        64,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "-1001972632255",
+        "text": "={{ ($('🔁 Split In Batches').item.json.tg_text || '').replace(/\\{BLOG_URL\\}/g, ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url)) }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "tg-send-message",
+      "name": "📨 TG sendMessage (long)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        288,
+        688
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "post",
+        "operation": "create",
+        "title": "={{ $('🔁 Split In Batches').item.json.title }}",
+        "content": "={{ [ $('🔁 Split In Batches').item.json.cover_url ? `<figure><img src=\"${$('🔁 Split In Batches').item.json.cover_url}\" alt=\"\"></figure>` : '', $('🔁 Split In Batches').item.json.blog_html || '', `<p>📌 <a href=\"https://www.youtube.com/@veselkoveconomy/videos\">Подписывайтесь на наш YouTube-канал</a></p>\n<p>📌 <a href=\"https://t.me/veselkoveconomy\">Подписывайтесь на наш телеграмм-канал</a></p>\n<p>📌 Читайте или слушайте книги <a href=\"https://www.litres.ru/book/sergey-veselkov/umnyy-biznes-ii-formula-uspeha-72925777/\">”Умный бизнес + ИИ = формула успеха”</a> и <a href=\"https://www.litres.ru/book/sergey-veselkov/sekrety-pribylnogo-biznesa-kontrintuitivnoe-upravlenie-na-70437511/chitat-onlayn/?clckid=aee1dd14\">\"Секреты прибыльного бизнеса\"</a> на ЛитРес</p>\n<p>📌 <a href=\"https://krymov.skillspace.ru/course/24937/about?clckid=6612fe12\">Проходите бесплатный курс по экономике</a></p>` ].filter(Boolean).join('\\n\\n') }}",
+        "status": "publish",
+        "additionalFields": {
+          "slug": "={{ $('🔁 Split In Batches').item.json.blog_alias }}",
+          "excerpt": "={{ $('🔁 Split In Batches').item.json.blog_meta }}"
+        }
+      },
+      "id": "blog-publish",
+      "name": "📝 Blog publish",
+      "type": "n8n-nodes-base.wordpress",
+      "typeVersion": 1,
+      "position": [
+        -608,
+        800
+      ],
+      "credentials": {
+        "wordpressApi": {
+          "id": "UIdmGvKLQnCjg1ud",
+          "name": "Wordpress account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $('🔁 Split In Batches').item.json.youtube_id }}",
+            "status": "published",
+            "published_at": "={{ $now.setZone('Europe/Moscow').toFormat('yyyy-LL-dd HH:mm') }}",
+            "tg_msg_id": "={{ $('📨 TG sendVideo').item.json.result.message_id }}",
+            "blog_url": "={{ ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url) }}"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-sheets-published",
+      "name": "✅ Update Sheets (published)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        512,
+        800
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1003932006777",
+        "text": "=✅ Опубликовано\n\n📹 {{ $('🔁 Split In Batches').item.json.title }}\n📺 {{ $('🔁 Split In Batches').item.json.youtube_url }}\n💬 TG: msg {{ $('📨 TG sendVideo').item.json.result.message_id }}\n📝 Блог: {{ ($('📝 Blog publish').item.json.link || $('📝 Blog publish').item.json.url) }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "notify-published",
+      "name": "📩 Notify (published)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        736,
+        800
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $('🔁 Split In Batches').item.json.youtube_id }}",
+            "status": "failed",
+            "error": "={{ ($json.error && ($json.error.message || $json.error.description)) || JSON.stringify($json.error || $json).substring(0, 500) }}"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ]
+        },
+        "options": {}
+      },
+      "id": "mark-failed",
+      "name": "❌ Mark as failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -160,
+        1120
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1003932006777",
+        "text": "=❌ Ошибка публикации\n\n📹 {{ $('🔁 Split In Batches').item.json.title }}\n📺 {{ $('🔁 Split In Batches').item.json.youtube_url }}\n\n⚠️ {{ ($json.error && ($json.error.message || $json.error.description)) || 'неизвестная ошибка' }}\n\nСтрока помечена <code>status=failed</code> в Sheets. Для ретрая поменяй на <code>ready</code>.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "notify-failed",
+      "name": "📩 Notify (failed)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        64,
+        1120
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "trigger-reminder",
+      "name": "⏰ Reminder Trigger (1h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2400,
+        1360
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "options": {}
+      },
+      "id": "read-sheets-reminder",
+      "name": "📊 Read Sheets (reminder)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -2176,
+        1360
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Находим строки: загружено, контент не готов, 1-3 часа до публикации, напоминание ещё не отправлено\nconst now = Date.now();\nconst in1h = now + 60 * 60 * 1000;\nconst in3h = now + 3 * 60 * 60 * 1000;\nconst results = [];\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  if (row.status !== 'uploaded') continue;\n  if (!row.scheduled_at) continue;\n  // Идемпотентность: если напоминание уже отправлено — пропускаем\n  if (row.reminded_at && String(row.reminded_at).trim() !== '') continue;\n\n  const iso = String(row.scheduled_at).trim().replace(' ', 'T') + ':00+03:00';\n  const scheduled = new Date(iso).getTime();\n  if (isNaN(scheduled)) continue;\n  if (scheduled < in1h || scheduled > in3h) continue;\n\n  results.push({ json: row });\n}\n\nreturn results;"
+      },
+      "id": "filter-reminder",
+      "name": "🔍 Filter: uploaded & 1-3h away",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1952,
+        1360
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003932006777",
+        "text": "=⚠️ До публикации «{{ $json.title }}» осталось меньше 3 часов, контент ещё не готов.\n\n🕐 Запланировано: {{ $json.scheduled_at }} MSK\n📺 {{ $json.youtube_url }}\n\n👉 Запусти в Claude Code:\n<code>/repurpose-youtube-video {{ $json.youtube_url }}</code>",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "notify-reminder",
+      "name": "📩 Notify (reminder)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1728,
+        1360
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "uXAYhXslRwHtZKD7",
+          "name": "Veselkov_smm"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "youtube_id": "={{ $json.youtube_id }}",
+            "reminded_at": "={{ $now.setZone('Europe/Moscow').toFormat('yyyy-LL-dd HH:mm') }}"
+          },
+          "matchingColumns": [
+            "youtube_id"
+          ]
+        },
+        "options": {}
+      },
+      "id": "mark-reminded",
+      "name": "✅ Mark reminded",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1504,
+        1360
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "smm-schedule-lookup",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-lookup",
+      "name": "🔌 Webhook: Lookup",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2400,
+        1920
+      ],
+      "webhookId": "smm-schedule-lookup",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "SMM Bridge Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "options": {}
+      },
+      "id": "lookup-read",
+      "name": "📊 Read schedule (lookup)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -2176,
+        1920
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Фильтруем по youtube_id из query-параметра webhook.\n// Всегда возвращаем ровно один item, чтобы Respond Lookup сработал даже на пустом результате.\nconst query = $('🔌 Webhook: Lookup').item.json.query || {};\nconst youtubeId = String(query.youtube_id || '').trim();\n\nif (!youtubeId) {\n  return [{ json: { found: false, row: null, error: 'youtube_id query param missing' } }];\n}\n\nconst rows = $input.all().map(i => i.json).filter(r => r && typeof r === 'object');\nconst match = rows.find(r => String(r.youtube_id || '').trim() === youtubeId);\n\nreturn [{ json: { found: !!match, row: match || null } }];"
+      },
+      "id": "lookup-filter",
+      "name": "🔍 Find by youtube_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "lookup-respond",
+      "name": "↩️ Respond Lookup",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1760,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smm-schedule-update",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-update",
+      "name": "🔌 Webhook: Update",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2400,
+        2240
+      ],
+      "webhookId": "smm-schedule-update",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "SMM Bridge Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook body приходит вложенным в $json.body.\n// Распаковываем в плоский item, чтобы Google Sheets autoMapInputData\n// корректно смапил поля (youtube_id, tg_text, status и т.д.) в колонки.\nconst results = [];\nfor (const item of $input.all()) {\n  const body = item.json && item.json.body ? item.json.body : item.json || {};\n  if (!body.youtube_id) {\n    throw new Error('youtube_id отсутствует в теле запроса');\n  }\n  results.push({ json: body });\n}\nreturn results;"
+      },
+      "id": "update-unpack-body",
+      "name": "📦 Unpack body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2288,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.SMM_SCHEDULE_SPREADSHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "schedule"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "youtube_id"
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-write",
+      "name": "📊 Update row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -2176,
+        2240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, updated: $json } }}",
+        "options": {}
+      },
+      "id": "update-respond",
+      "name": "↩️ Respond Update",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1952,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('🔁 Split In Batches').item.json.drive_file_id }}"
+        },
+        "options": {
+          "fileName": "={{ (($('🔁 Split In Batches').item.json.blog_alias || $('🔁 Split In Batches').item.json.youtube_id || 'telegram-video') + '.mp4') }}"
+        }
+      },
+      "id": "download-tg-video",
+      "name": "⬇️ Download TG video",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -384,
+        800
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wNMKLQ7xHaUW968M",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "connections": {
+    "⏰ Publisher Trigger (5 min)": {
+      "main": [
+        [
+          {
+            "node": "📊 Read Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Read Sheets": {
+      "main": [
+        [
+          {
+            "node": "🔍 Filter: ready & due",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Filter: ready & due": {
+      "main": [
+        [
+          {
+            "node": "🔁 Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔁 Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "🔒 Lock current row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔒 Lock current row": {
+      "main": [
+        [
+          {
+            "node": "📝 Blog publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔀 tg_text > 1024?": {
+      "main": [
+        [
+          {
+            "node": "📨 TG sendMessage (long)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "✅ Update Sheets (published)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📨 TG sendMessage (long)": {
+      "main": [
+        [
+          {
+            "node": "✅ Update Sheets (published)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Mark as failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Blog publish": {
+      "main": [
+        [
+          {
+            "node": "⬇️ Download TG video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Mark as failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "❌ Mark as failed": {
+      "main": [
+        [
+          {
+            "node": "📩 Notify (failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📩 Notify (failed)": {
+      "main": [
+        [
+          {
+            "node": "🔁 Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✅ Update Sheets (published)": {
+      "main": [
+        [
+          {
+            "node": "📩 Notify (published)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📩 Notify (published)": {
+      "main": [
+        [
+          {
+            "node": "🔁 Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏰ Reminder Trigger (1h)": {
+      "main": [
+        [
+          {
+            "node": "📊 Read Sheets (reminder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Read Sheets (reminder)": {
+      "main": [
+        [
+          {
+            "node": "🔍 Filter: uploaded & 1-3h away",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Filter: uploaded & 1-3h away": {
+      "main": [
+        [
+          {
+            "node": "📩 Notify (reminder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📩 Notify (reminder)": {
+      "main": [
+        [
+          {
+            "node": "✅ Mark reminded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔌 Webhook: Lookup": {
+      "main": [
+        [
+          {
+            "node": "📊 Read schedule (lookup)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Read schedule (lookup)": {
+      "main": [
+        [
+          {
+            "node": "🔍 Find by youtube_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Find by youtube_id": {
+      "main": [
+        [
+          {
+            "node": "↩️ Respond Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔌 Webhook: Update": {
+      "main": [
+        [
+          {
+            "node": "📦 Unpack body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📦 Unpack body": {
+      "main": [
+        [
+          {
+            "node": "📊 Update row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Update row": {
+      "main": [
+        [
+          {
+            "node": "↩️ Respond Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⬇️ Download TG video": {
+      "main": [
+        [
+          {
+            "node": "📨 TG sendVideo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Mark as failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📨 TG sendVideo": {
+      "main": [
+        [
+          {
+            "node": "🔀 tg_text > 1024?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Mark as failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

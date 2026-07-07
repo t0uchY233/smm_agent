@@ -3,8 +3,7 @@ from pathlib import Path
 
 
 WORKFLOWS = [
-    Path("n8n.json"),
-    Path("n8n-publisher.json"),
+    Path("n8n-wordpress-publisher.json"),
 ]
 
 REQUIRED_FOOTER_LINKS = {
@@ -21,14 +20,14 @@ def _blog_publish_json_body(workflow_path: Path) -> str:
     blog_nodes = [node for node in workflow["nodes"] if node["id"] == "blog-publish"]
 
     assert len(blog_nodes) == 1
-    return blog_nodes[0]["parameters"]["jsonBody"]
+    parameters = blog_nodes[0]["parameters"]
+    return parameters.get("jsonBody") or parameters.get("content")
 
 
 def test_blog_publish_appends_clickable_footer_links():
     for workflow_path in WORKFLOWS:
         json_body = _blog_publish_json_body(workflow_path)
 
-        assert "content:" in json_body
         assert "blog_html" in json_body
 
         for url, link_text in REQUIRED_FOOTER_LINKS.items():

@@ -8,10 +8,12 @@
   {title, body_text, scheduled_at, alias, source_path}
 
 scheduled_at = "YYYY-MM-DD HH:MM" (MSK), извлекается из имени файла формата
-  YYYY-MM-DD-HHMM-alias.docx (например 2026-05-01-1400-burovye-krs.docx).
+  YYYY-MM-DD-HHMM-Русский заголовок.docx
+  (например 2026-06-25-1400-Топ 5 экономических инструментов.docx).
 
-Если имя в старом формате YYYY-MM-DD-alias.docx (без времени) —
-scheduled_at = null, alias извлекается всё равно.
+Если имя в старом формате YYYY-MM-DD-Русский заголовок.docx (без времени) —
+scheduled_at = null, alias извлекается всё равно. Поле alias сохранено для
+совместимости, но теперь может содержать русский заголовок с пробелами.
 """
 import sys
 import io
@@ -19,14 +21,18 @@ import os
 import json
 import re
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-
 from docx import Document
 
 
 NEW_NAME_RE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})-(.+)\.docx$')
 OLD_NAME_RE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})-(.+)\.docx$')
+
+
+def configure_utf8_stdio():
+    for name in ('stdout', 'stderr'):
+        stream = getattr(sys, name)
+        if stream and hasattr(stream, 'buffer') and (stream.encoding or '').lower() not in ('utf-8', 'utf8'):
+            setattr(sys, name, io.TextIOWrapper(stream.buffer, encoding='utf-8'))
 
 
 def parse_filename(filename):
@@ -53,6 +59,9 @@ def read_docx(path):
         # Игнорируем разделители и метаданные
         if text.startswith('— — —') or text.startswith('Публикация:'):
             continue
+        # Legacy safety: production-only visual markers must never leak into posts.
+        if text.startswith(('ВИЗУАЛ НА ЭКРАН', 'СХЕМА НА ЭКРАН', 'КАРТИНКА НА ЭКРАН')):
+            continue
         # Первый Heading становится title
         if title is None and (para.style.name.startswith('Heading') or para.style.name == 'Title'):
             title = text
@@ -67,6 +76,8 @@ def read_docx(path):
 
 
 def main():
+    configure_utf8_stdio()
+
     if len(sys.argv) != 2:
         print(json.dumps({"error": "Usage: python tools/read_docx.py <path-to-docx>"}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
