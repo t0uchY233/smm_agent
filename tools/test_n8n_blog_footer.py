@@ -3,8 +3,6 @@ from pathlib import Path
 
 
 WORKFLOWS = [
-    Path("n8n.json"),
-    Path("n8n-publisher.json"),
     Path("n8n-wordpress-publisher.json"),
 ]
 

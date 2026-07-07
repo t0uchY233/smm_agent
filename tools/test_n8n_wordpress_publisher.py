@@ -56,7 +56,10 @@ def test_wordpress_publisher_sends_telegram_video_from_drive_binary():
     assert video_node["parameters"]["operation"] == "sendVideo"
     assert video_node["parameters"]["binaryData"] is True
     assert video_node["parameters"]["binaryPropertyName"] == "data"
-    assert "{BLOG_URL}" in video_node["parameters"]["additionalFields"]["caption"]
+    caption = video_node["parameters"]["additionalFields"]["caption"]
+    assert "replace(/\\{BLOG_URL\\}/g" in caption
+    assert "$('📝 Blog publish').item.json.link" in caption
+    assert "$('📝 Blog publish').item.json.url" in caption
 
     connections = workflow["connections"]
     assert connections["📝 Blog publish"]["main"][0][0]["node"] == "⬇️ Download TG video"

@@ -14,15 +14,23 @@ import json
 import base64
 import argparse
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - keeps helper importable without python-dotenv
+    load_dotenv = None
 
-from dotenv import load_dotenv
-load_dotenv()
+if load_dotenv:
+    load_dotenv()
 
 try:
     from wordpress_media import WordPressMediaError, upload_media_bytes
 except ImportError:
     from tools.wordpress_media import WordPressMediaError, upload_media_bytes
+
+
+def configure_utf8_stdout():
+    if sys.stdout and hasattr(sys.stdout, 'buffer') and (sys.stdout.encoding or '').lower() not in ('utf-8', 'utf8'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def extract_images_from_docx(docx_path):
@@ -120,6 +128,8 @@ def upload_images(images):
 
 
 def main():
+    configure_utf8_stdout()
+
     parser = argparse.ArgumentParser(description='Загрузка изображений в WordPress Media Library')
     parser.add_argument('files', nargs='*', help='Файлы изображений для загрузки')
     parser.add_argument('--from-docx', help='Извлечь и загрузить изображения из DOCX файла')

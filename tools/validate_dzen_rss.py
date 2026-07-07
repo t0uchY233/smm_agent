@@ -345,7 +345,7 @@ def validate_feed(xml_str: str) -> list:
 
 def main():
     # Настройка UTF-8 для Windows
-    if sys.stdout and hasattr(sys.stdout, "buffer"):
+    if sys.stdout and hasattr(sys.stdout, "buffer") and (sys.stdout.encoding or "").lower() not in ("utf-8", "utf8"):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
     url = sys.argv[1] if len(sys.argv) > 1 else "https://veselkov.me/in/feed.xml"

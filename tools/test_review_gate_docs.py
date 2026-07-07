@@ -12,7 +12,7 @@ APPROVAL_PHRASES = (
 
 
 def test_publish_from_script_requires_review_gate_before_ready():
-    skill = Path(".claude/skills/publish-from-script/SKILL.md").read_text(encoding="utf-8")
+    skill = Path(".codex/skills/publish-from-script/SKILL.md").read_text(encoding="utf-8")
 
     assert "review_needed" in skill
     assert '"status": "review_needed"' in skill
@@ -24,9 +24,9 @@ def test_publish_from_script_requires_review_gate_before_ready():
 
 
 def test_project_docs_describe_review_needed_status():
-    docs_path = Path("AGENTS.md") if Path("AGENTS.md").exists() else Path("CLAUDE.md")
+    docs_path = Path("AGENTS.md") if Path("AGENTS.md").exists() else Path("AGENTS.md")
     docs = docs_path.read_text(encoding="utf-8")
-    command = Path(".claude/commands/publish-from-script.md").read_text(encoding="utf-8")
+    command = Path(".codex/commands/publish-from-script.md").read_text(encoding="utf-8")
 
     assert "review_needed" in docs
     assert "uploaded → review_needed → ready" in docs

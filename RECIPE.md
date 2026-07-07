@@ -1,26 +1,26 @@
 # RECIPE.md — как (пере)собрать SMM Agent правильно
 
-Ретроспективный план: «если бы делали с нуля, как лучше». Здесь зафиксированы три валидных подхода + универсальный SOP, чтобы любая будущая сессия (Claude, человек, другой агент) могла повторить или улучшить результат без блужданий.
+Ретроспективный план: «если бы делали с нуля, как лучше». Здесь зафиксированы три валидных подхода + универсальный SOP, чтобы любая будущая сессия (Codex, человек, другой агент) могла повторить или улучшить результат без блужданий.
 
 ---
 
 ## Цель решения
 
-Двух-этапный pipeline для контента: **(1) Claude Code** готовит сценарий и тексты из DOCX, **(2) n8n** публикует их по расписанию в Telegram + блог veselkov.me. Очередь — Google Sheets. Время публикации зашито в имя файла.
+Двух-этапный pipeline для контента: **(1) Codex** готовит сценарий и тексты из DOCX, **(2) n8n** публикует их по расписанию в Telegram + блог veselkov.me. Очередь — Google Sheets. Время публикации зашито в имя файла.
 
 Артефакты, которые в итоге должны существовать:
-1. `.claude/skills/{video-script,publish-from-script,smm-conductor,docx-manipulation}/SKILL.md`
-2. `.claude/commands/{video-script,publish-from-script}.md` — slash-команды
+1. `.codex/skills/{video-script,publish-from-script,smm-conductor,render-with-visuals,render-docx-visuals}/SKILL.md`
+2. `.codex/commands/{video-script,publish-from-script}.md` — slash-команды
 3. `tools/{read_docx,generate_cover}.py` + поддержка
 4. `n8n.json` — единый workflow (uploader + publisher + 2 webhook)
 5. `smm-schedule-template.xlsx` — шаблон Google Sheets
-6. `CLAUDE.md`, `.env.example`, `n8n-migration.md`
+6. `AGENTS.md`, `.env.example`, `n8n-migration.md`
 
 ---
 
 ## Вариант A — Spec-First (waterfall с документом)
 
-**Идея.** Перед любым кодом написать один документ `SPEC.md`, в котором зафиксированы: формат имени файла видео и DOCX, JSON-схема payload для n8n webhook, схема колонок Google Sheets, контракт между Claude и n8n. Согласовать с пользователем. Потом реализовать строго по спеке.
+**Идея.** Перед любым кодом написать один документ `SPEC.md`, в котором зафиксированы: формат имени файла видео и DOCX, JSON-схема payload для n8n webhook, схема колонок Google Sheets, контракт между Codex и n8n. Согласовать с пользователем. Потом реализовать строго по спеке.
 
 **Плюсы.**
 - Минимум переделок. Спека — единая точка истины, конфликтов между скиллами/n8n/Sheets не возникает.
@@ -38,7 +38,7 @@
 
 ## Вариант B — Vertical Slice (то, что делали в этой сессии)
 
-**Идея.** Итеративно по слоям. Сначала Claude-side (skills + tools + commands), потом инфраструктура (n8n, Sheets), потом polish (smm-conductor, .env.example, RECIPE). Каждый слой согласовывается: «понятно — едем дальше», «не понятно — переделываем».
+**Идея.** Итеративно по слоям. Сначала Codex-side (skills + tools + commands), потом инфраструктура (n8n, Sheets), потом polish (smm-conductor, .env.example, RECIPE). Каждый слой согласовывается: «понятно — едем дальше», «не понятно — переделываем».
 
 **Плюсы.**
 - Пользователь видит результат уже через час.
@@ -74,7 +74,7 @@
 
 ## Рекомендация
 
-**Default = вариант B (vertical slice).** Это то что мы делали — он robustly работает в условиях «один автор + неполные требования + Windows + Claude Code».
+**Default = вариант B (vertical slice).** Это то что мы делали — он robustly работает в условиях «один автор + неполные требования + Windows + Codex».
 
 **Перейти на C** если задача срочная (< 2 часов) И контракты можно зафиксировать одним абзацем.
 
@@ -88,11 +88,11 @@
 
 ### Phase 0. Discovery (15 мин)
 
-- [ ] Прочитать `CLAUDE.md` проекта целиком.
+- [ ] Прочитать `AGENTS.md` проекта целиком.
 - [ ] Запустить `git log --oneline -20` — понять что было раньше, нет ли конкурирующих веток.
 - [ ] Проверить `git worktree list` — нет ли заброшенных worktree, которые сломают `git status`.
 - [ ] Прочитать `.env.example` (или `.env` если разрешено) — какие интеграции есть.
-- [ ] Найти существующие tools (`ls tools/`) и skills (`ls .claude/skills/`) — НЕ пересоздавать то что уже есть.
+- [ ] Найти существующие tools (`ls tools/`) и skills (`ls .codex/skills/`) — НЕ пересоздавать то что уже есть.
 
 **Защищает от:** дублирования работы, конфликтов с чужой веткой, broken worktree (мы потеряли 30 минут на этом).
 
@@ -100,7 +100,7 @@
 
 - [ ] Войти в plan mode (`Ctrl+E` или явная команда).
 - [ ] Запустить ≤ 3 Explore-агентов параллельно для разных частей кодовой базы.
-- [ ] Сформулировать 3-4 ключевые развилки и спросить через `AskUserQuestion` (с короткими label'ами, не больше 12 символов).
+- [ ] Сформулировать 3-4 ключевые развилки и коротко спросить пользователя.
 - [ ] **Объяснить пользователю механику словами ДО показа плана**, если решение нетривиально (polling, webhooks, scheduled triggers).
 - [ ] Записать план в plan file. Без «улучшений» которые пользователь не просил.
 - [ ] `ExitPlanMode`.
@@ -113,10 +113,10 @@
 
 1. **Data contracts** — формат имени файла, схема Sheets, JSON payload. Зафиксировать словами.
 2. **Tools** — Python скрипты которые работают с этими данными. Каждый tool имеет CLI и возвращает JSON.
-3. **Skills** — markdown в `.claude/skills/`, описывает workflow используя tools. Frontmatter `description` с явными триггерами.
-4. **Slash-commands** — `.claude/commands/*.md` как тонкие обёртки над skills. Без них `/команда` не работает напрямую.
+3. **Skills** — markdown в `.codex/skills/`, описывает workflow используя tools. Frontmatter `description` с явными триггерами.
+4. **Slash-commands** — `.codex/commands/*.md` как тонкие обёртки над skills. Без них `/команда` не работает напрямую.
 5. **n8n workflow** — собрать как один JSON. UUID webhook'ов и credential ID — НЕ менять, иначе сломаются ссылки в `.env`.
-6. **Documentation** — `CLAUDE.md`, `n8n-migration.md`, `RECIPE.md` (этот файл) обновлять последними, когда код стабилен.
+6. **Documentation** — `AGENTS.md`, `n8n-migration.md`, `RECIPE.md` (этот файл) обновлять последними, когда код стабилен.
 
 **Защищает от:** реализации UI до контрактов, лишнего рефакторинга skills после смены схемы данных.
 
@@ -127,7 +127,7 @@
 - [ ] `.gitignore` содержит `.env`, `.tmp/`, `~$*`.
 - [ ] `n8n.json` содержит UUID webhook'ов которые матчат `.env.example` URL'ы.
 - [ ] `smm-schedule-template.xlsx` имеет ровно те колонки в том порядке, что ждёт n8n.
-- [ ] Запустить мысленный test: «человек делает `git clone` → `cp .env.example .env` → правит ключи → `claude` → всё работает».
+- [ ] Запустить мысленный test: «человек делает `git clone` → `cp .env.example .env` → правит ключи → запускает Codex → всё работает».
 
 **Защищает от:** «у меня работает, у тебя нет», broken symlinks при clone на новой машине.
 
@@ -136,8 +136,8 @@
 - [ ] Прогнать end-to-end сценарий из `n8n-migration.md` (создать тестовый файл, проверить что n8n загрузил, что Sheets обновился, что Telegram пришёл).
 - [ ] `git status` чистый (нет orphan files, untracked мусора).
 - [ ] `git log --oneline -5` показывает осмысленные commits с понятными названиями.
-- [ ] Все skills видны через `Skill tool` (проверить список).
-- [ ] Все slash-команды появляются по `/` autocomplete (проверить в чате после рестарта Claude).
+- [ ] Все workflows лежат в `.codex/skills/`.
+- [ ] Все slash-команды лежат в `.codex/commands/`.
 
 **Защищает от:** ложных «готово!» которые потом разваливаются у пользователя.
 
@@ -158,9 +158,9 @@
 |---|---|---|
 | Symlink в git под Windows | `git status` падает, `rebase` не может создать файл | Physical copy, не symlink. Всегда. |
 | `extensions.worktreeConfig=true` | git status ищет несуществующий config | Не включать без необходимости |
-| Заброшенный worktree | `fatal: not a git repository: superbrain/...` | `git worktree prune` + `rm -rf .claude/worktrees/<name>` |
+| Заброшенный worktree | `fatal: not a git repository: superbrain/...` | `git worktree prune` + `rm -rf .codex/worktrees/<name>` |
 | Skill переименован, папка осталась | Конкурирует с новым | После rename — `rm -rf` старой папки |
-| Slash-команда не работает | Пользователь набрал `/foo` — ничего | Создать `.claude/commands/foo.md` отдельно от skill |
+| Slash-команда не работает | Пользователь набрал `/foo` — ничего | Создать `.codex/commands/foo.md` отдельно от skill |
 | Skill description без `MUST` | Модель его не активирует автоматически | Использовать «MUST BE INVOKED» или конкретные триггеры в description |
 | n8n credential placeholder | Workflow не запускается на новой машине | В JSON оставить `REPLACE_ME_*`, в migration.md описать какой credential выбрать |
 | Sheets колонка scheduled_at как Date | n8n filter не парсит | Format → Plain text |
@@ -172,15 +172,15 @@
 
 ```
 smm_agent/
-├── .claude/
-│   ├── skills/{video-script,publish-from-script,smm-conductor,docx-manipulation}/SKILL.md
+├── .codex/
+│   ├── skills/{video-script,publish-from-script,smm-conductor,render-with-visuals,render-docx-visuals}/SKILL.md
 │   └── commands/{video-script,publish-from-script}.md
 ├── tools/{read_docx,generate_cover,upload_images}.py
 ├── n8n.json                          ← единый workflow
 ├── n8n-migration.md                  ← как импортировать в свой n8n
 ├── smm-schedule-template.xlsx        ← Sheets schema
 ├── tone-of-voice.md
-├── CLAUDE.md
+├── AGENTS.md
 ├── RECIPE.md                         ← этот файл
 ├── .env.example
 └── .gitignore                        (.env, .tmp/, ~$*)

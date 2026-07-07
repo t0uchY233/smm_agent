@@ -30,10 +30,13 @@ try:
 except ImportError:
     from tools.wordpress_media import WordPressMediaError, upload_media_bytes
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - keeps helper importable without python-dotenv
+    load_dotenv = None
 
-from dotenv import load_dotenv
-load_dotenv()
+if load_dotenv:
+    load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -68,6 +71,11 @@ PROMPTS = {
         'Без фотографий людей. Минималистичный современный дизайн.'
     ),
 }
+
+
+def configure_utf8_stdout():
+    if sys.stdout and hasattr(sys.stdout, 'buffer') and (sys.stdout.encoding or '').lower() not in ('utf-8', 'utf8'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def generate_image(title, style='blog', use_face=True):
@@ -214,6 +222,8 @@ def upload_to_wordpress(image_b64, filename):
 
 
 def main():
+    configure_utf8_stdout()
+
     parser = argparse.ArgumentParser(description='Генерация обложки для статьи блога')
     parser.add_argument('title', help='Заголовок статьи')
     parser.add_argument('--upload', action='store_true', help='Загрузить в WordPress Media Library')
